@@ -37,7 +37,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
-import src.models.vision_transformer as video_vit
 from app.vjepa.transforms import make_transforms
 from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
@@ -46,6 +45,15 @@ from src.utils.logging import AverageMeter, get_logger
 
 logger = get_logger(__name__, force=True)
 
+def int2mil(number):
+    if abs(number) >= 100_000:
+        formatted_number = "{:.1f}M".format(number / 1_000_000)
+    else:
+        formatted_number = str(number)
+    return formatted_number
+
+def trainable_params(model):
+    return int2mil(sum(p.numel() for p in model.parameters() if p.requires_grad == True))
 
 def _env_int(name: str, default: Optional[int] = None) -> Optional[int]:
     v = os.environ.get(name, None)
@@ -78,20 +86,90 @@ class TrainBatch:
     labels: torch.Tensor
 
 
-class VideoViTClassifier(nn.Module):
+def _dinov2_frame_features(dino: nn.Module, x: torch.Tensor) -> torch.Tensor:
     """
-    Simple supervised head on top of the repo's `VisionTransformer` video backbone.
+    Return a single feature vector per image.
+
+    Supports common Dinov2 APIs:
+    - `forward_features(...)` returning a dict containing `x_norm_clstoken`
+    - `forward(...)` returning a tensor [B, D]
+    """
+    if hasattr(dino, "forward_features"):
+        feats = dino.forward_features(x)
+        if isinstance(feats, dict):
+            if "x_norm_clstoken" in feats:
+                return feats["x_norm_clstoken"]
+            if "x_clstoken" in feats:
+                return feats["x_clstoken"]
+        if torch.is_tensor(feats):
+            return feats
+    out = dino(x)
+    if isinstance(out, dict):
+        if "x_norm_clstoken" in out:
+            return out["x_norm_clstoken"]
+        if "x_clstoken" in out:
+            return out["x_clstoken"]
+    if torch.is_tensor(out):
+        return out
+    raise RuntimeError(f"Unsupported Dinov2 output type: {type(out)}")
+
+
+class DinoFrameMLPClassifier(nn.Module):
+    """
+    (B, C, T, H, W) video -> Dinov2 per-frame features -> per-frame MLP -> meanpool over T -> linear classifier
     """
 
-    def __init__(self, backbone: nn.Module, embed_dim: int, num_classes: int):
+    def __init__(
+        self,
+        dino: nn.Module,
+        dino_dim: int,
+        mlp_hidden_dim: int,
+        mlp_out_dim: int,
+        num_classes: int,
+        freeze_dino: bool = True,
+    ):
         super().__init__()
-        self.backbone = backbone
-        self.head = nn.Linear(embed_dim, num_classes)
+        self.dino = dino
+        self.freeze_dino = freeze_dino
+
+        self.frame_mlp = nn.Sequential(
+            nn.Linear(dino_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Linear(mlp_hidden_dim, mlp_out_dim),
+        )
+        self.head = nn.Linear(mlp_out_dim, num_classes)
+
+        if self.freeze_dino:
+            for p in self.dino.parameters():
+                p.requires_grad_(False)
+            self.dino.eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        # Keep Dinov2 frozen in eval mode even when the rest of the model trains.
+        if self.freeze_dino:
+            self.dino.eval()
+        return self
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Backbone returns token embeddings: [B, N, D]
-        toks = self.backbone(x)
-        pooled = toks.mean(dim=1)
+        if x.ndim != 5:
+            raise ValueError(f"Expected video tensor [B,C,T,H,W], got shape={tuple(x.shape)}")
+        B, C, T, H, W = x.shape
+        frames = x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)  # (B*T, C, H, W)
+
+        if self.freeze_dino:
+            with torch.no_grad():
+                f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
+        else:
+            f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
+
+        f = f.reshape(B, T, -1)  # (B, T, D)
+        f = self.frame_mlp(f)  # (B, T, M)
+        pooled = f.mean(dim=1)  # (B, M)
         return self.head(pooled)
 
 
@@ -128,16 +206,22 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--crop-size", type=int, default=224, help="Spatial crop size used by repo transforms.")
 
     # --- model
-    p.add_argument("--model-name", type=str, default="vit_small", help="One of src.models.vision_transformer.*")
-    p.add_argument("--patch-size", type=int, default=16)
-    p.add_argument("--tubelet-size", type=int, default=2)
-    p.add_argument("--use-sdpa", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--use-rope", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument("--dino-repo", type=str, default="facebookresearch/dinov2", help="Torch Hub repo for Dinov2.")
+    p.add_argument(
+        "--dino-model",
+        type=str,
+        default="dinov2_vits14",
+        help="Torch Hub entry (e.g. dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14).",
+    )
+    p.add_argument("--dino-pretrained", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--freeze-dino", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--mlp-hidden-dim", type=int, default=1024)
+    p.add_argument("--mlp-out-dim", type=int, default=512)
 
     p.add_argument("--num-classes", type=int, required=True, help="Number of classes (labels in CSV must be integer in [0, num_classes)).")
 
     # --- optimization
-    p.add_argument("--epochs", type=int, default=1)
+    p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=0.05)
     p.add_argument("--grad-accum", type=int, default=1)
@@ -172,22 +256,31 @@ def _get_device() -> torch.device:
 
 
 def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
-    if args.model_name not in video_vit.__dict__:
-        raise ValueError(f"Unknown --model-name={args.model_name!r}. Must exist in src.models.vision_transformer.")
+    # Load Dinov2 as an image encoder and apply it per-frame.
+    try:
+        dino = torch.hub.load(args.dino_repo, args.dino_model, pretrained=args.dino_pretrained)
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to load Dinov2 via torch.hub. "
+            "If you're offline, make sure the Dinov2 hub weights are already cached or set --dino-pretrained false.\n"
+            f"repo={args.dino_repo!r} model={args.dino_model!r} pretrained={args.dino_pretrained}\n"
+            f"original_error={e}"
+        )
 
-    backbone = video_vit.__dict__[args.model_name](
-        img_size=(args.crop_size, args.crop_size),
-        patch_size=args.patch_size,
-        num_frames=args.frames_per_clip,
-        tubelet_size=args.tubelet_size,
-        use_sdpa=args.use_sdpa,
-        use_rope=args.use_rope,
+    # Infer feature dimension with a tiny forward on CPU (cheap, avoids model-specific attribute assumptions).
+    dino.eval()
+    with torch.no_grad():
+        dummy = torch.zeros(1, 3, args.crop_size, args.crop_size)
+        d = int(_dinov2_frame_features(dino, dummy).shape[-1])
+
+    model = DinoFrameMLPClassifier(
+        dino=dino,
+        dino_dim=d,
+        mlp_hidden_dim=args.mlp_hidden_dim,
+        mlp_out_dim=args.mlp_out_dim,
+        num_classes=args.num_classes,
+        freeze_dino=args.freeze_dino,
     )
-    embed_dim = getattr(backbone, "embed_dim", None)
-    if embed_dim is None:
-        raise RuntimeError("Backbone did not expose embed_dim; expected VisionTransformer-like module.")
-
-    model = VideoViTClassifier(backbone=backbone, embed_dim=int(embed_dim), num_classes=args.num_classes)
     return model.to(device)
 
 
@@ -253,7 +346,11 @@ def main() -> None:
     # --- model / opt
     model = _build_model(args, device)
     model = _wrap_ddp(model, device, world_size)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(
+        (p for p in model.parameters() if p.requires_grad),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+    )
 
     # --- train
     global_step = 0
@@ -274,7 +371,6 @@ def main() -> None:
             x = clips[0] if isinstance(clips, (list, tuple)) else clips
             x = x.to(device, non_blocking=True)
             y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
-
             logits = model(x)
             loss = F.cross_entropy(logits, y) / max(args.grad_accum, 1)
             loss.backward()
