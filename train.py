@@ -40,13 +40,109 @@ from root.utils import _env_int, _get_device, _iter_batches
 from root.ddp import _wrap_ddp, _ddp_mean, _is_distributed
 from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
-from src.utils.logging import AverageMeter, get_logger
+from src.utils.logging import AverageMeter
 
 
-logger = get_logger(__name__, force=True)
+@torch.no_grad()
+def validate(
+    model: torch.nn.Module,
+    loader,
+    device: torch.device,
+    world_size: int,
+    *,
+    epoch: int,
+    step: int,
+    is_master: bool,
+) -> tuple[float, float]:
+    model.eval()
+    correct = torch.tensor(0.0, device=device)
+    total = torch.tensor(0.0, device=device)
+    loss_sum = torch.tensor(0.0, device=device)
+    for batch in _iter_batches(loader):
+        clips = batch.clips
+        x = clips[0] if isinstance(clips, (list, tuple)) else clips
+        x = x.to(device, non_blocking=True)
+        y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
+        logits = model(x)
+        loss_sum += F.cross_entropy(logits, y, reduction="sum")
+        pred = logits.argmax(dim=1)
+        correct += (pred == y).float().sum()
+        total += float(y.numel())
+
+    if _is_distributed(world_size):
+        dist.all_reduce(correct, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total, op=dist.ReduceOp.SUM)
+        dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+
+    acc = (correct / total.clamp_min(1.0)).item()
+    mean_loss = (loss_sum / total.clamp_min(1.0)).item()
+    if is_master:
+        print(f"val epoch_num={epoch} step_num={step} mean_loss={mean_loss:.4f} mean_acc={acc:.4f}", flush=True)
+    model.train()
+    return mean_loss, acc
 
 
-def main() -> None:
+def train_epoch(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    loader,
+    sampler,
+    device: torch.device,
+    world_size: int,
+    args,
+    epoch: int,
+    global_step: int,
+    *,
+    is_master: bool,
+    val_loader=None,
+    val_steps=None,
+    val_accs=None,
+) -> int:
+    if sampler is not None and hasattr(sampler, "set_epoch"):
+        sampler.set_epoch(epoch)
+
+    loss_meter = AverageMeter()
+    it_time = AverageMeter()
+
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+
+    for it, batch in enumerate(_iter_batches(loader)):
+        t0 = time.time()
+
+        clips = batch.clips
+        x = clips[0] if isinstance(clips, (list, tuple)) else clips
+        x = x.to(device, non_blocking=True)
+        y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
+        logits = model(x)
+        loss = F.cross_entropy(logits, y) / max(args.grad_accum, 1)
+        loss.backward()
+
+        if (it + 1) % max(args.grad_accum, 1) == 0:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+        # Logging
+        loss_reduced = _ddp_mean(loss.detach() * max(args.grad_accum, 1)).item()
+        loss_meter.update(loss_reduced, n=x.size(0))
+        it_time.update((time.time() - t0) * 1000.0)
+
+        if is_master:
+            print(f"epoch_num={epoch} step_num={global_step} loss={loss_meter.avg:.4f} iter_ms={it_time.avg:.1f}", flush=True)
+
+        global_step += 1
+
+        if val_loader is not None and args.val_freq and (global_step % args.val_freq == 0):
+            _vloss, acc = validate(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
+            if is_master:
+                if val_steps is not None and val_accs is not None:
+                    val_steps.append(global_step)
+                    val_accs.append(acc)
+
+    return global_step
+
+
+def trainer() -> None:
     args = _parse_args()
 
     # torchrun compatibility: prefer env vars if available, but still call repo helper.
@@ -61,7 +157,6 @@ def main() -> None:
     is_master = rank == 0
     if is_master:
         os.makedirs(args.output_dir, exist_ok=True)
-    logger.info(f"Initialized device={device}, rank/world={rank}/{world_size}")
 
     # --- data
     transform = make_transforms(crop_size=args.crop_size)
@@ -84,7 +179,28 @@ def main() -> None:
         pin_mem=args.pin_mem,
         persistent_workers=args.persistent_workers,
         deterministic=args.deterministic_loader,
-        log_dir=(os.path.join(args.output_dir, "dataloader_logs") if is_master else None),
+        log_dir=None,
+        **sampling_kwargs,
+    )
+
+    _vd, val_loader, val_sampler = make_videodataset(
+        data_paths=args.val_data_path,
+        batch_size=(args.val_batch_size or args.batch_size),
+        frames_per_clip=args.frames_per_clip,
+        num_clips=args.num_clips,
+        random_clip_sampling=False,
+        allow_clip_overlap=args.allow_clip_overlap,
+        transform=transform,
+        shared_transform=None,
+        rank=rank,
+        world_size=world_size,
+        collator=None,
+        drop_last=False,
+        num_workers=args.num_workers,
+        pin_mem=args.pin_mem,
+        persistent_workers=args.persistent_workers,
+        deterministic=True,
+        log_dir=None,
         **sampling_kwargs,
     )
 
@@ -99,44 +215,16 @@ def main() -> None:
 
     # --- train
     global_step = 0
+    val_steps: list[int] = []
+    val_accs: list[float] = []
     for epoch in range(args.epochs):
-        if sampler is not None and hasattr(sampler, "set_epoch"):
-            sampler.set_epoch(epoch)
+        if val_sampler is not None and hasattr(val_sampler, "set_epoch"):
+            val_sampler.set_epoch(epoch)
 
-        loss_meter = AverageMeter()
-        it_time = AverageMeter()
+        global_step = train_epoch(model, optimizer, loader, sampler, device, world_size, args, epoch, global_step, is_master=is_master, val_loader=val_loader, val_steps=val_steps, val_accs=val_accs)
 
-        model.train()
-        optimizer.zero_grad(set_to_none=True)
-
-        for it, batch in enumerate(_iter_batches(loader)):
-            t0 = time.time()
-
-            clips = batch.clips
-            x = clips[0] if isinstance(clips, (list, tuple)) else clips
-            x = x.to(device, non_blocking=True)
-            y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
-            logits = model(x)
-            loss = F.cross_entropy(logits, y) / max(args.grad_accum, 1)
-            loss.backward()
-
-            if (it + 1) % max(args.grad_accum, 1) == 0:
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-
-            # Logging
-            loss_reduced = _ddp_mean(loss.detach() * max(args.grad_accum, 1)).item()
-            loss_meter.update(loss_reduced, n=x.size(0))
-            it_time.update((time.time() - t0) * 1000.0)
-
-            if is_master and (global_step % args.log_freq == 0):
-                logger.info(
-                    f"epoch={epoch} step={global_step} "
-                    f"loss={loss_meter.avg:.4f} iter_ms={it_time.avg:.1f} "
-                    f"bs={args.batch_size} world={world_size}"
-                )
-
-            global_step += 1
+        if val_loader is not None:
+            validate(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
 
         if is_master and args.save_every_epochs > 0 and ((epoch + 1) % args.save_every_epochs == 0):
             ckpt_path = os.path.join(args.output_dir, f"ckpt_epoch_{epoch:04d}.pt")
@@ -147,7 +235,6 @@ def main() -> None:
                 "args": vars(args),
             }
             torch.save(to_save, ckpt_path)
-            logger.info(f"Saved checkpoint: {ckpt_path}")
 
         if _is_distributed(world_size):
             dist.barrier()
@@ -157,6 +244,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    trainer()
 
  

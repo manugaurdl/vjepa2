@@ -8,10 +8,12 @@ def _parse_args() -> argparse.Namespace:
 
     # --- I/O
     p.add_argument("--data-path", action="append", required=True, help="CSV or NPY path. Repeatable.")
+    p.add_argument("--val-data-path", action="append", required=True, help="CSV or NPY path. Repeatable.")
     p.add_argument("--output-dir", default="./outputs/min_train", help="Where to write checkpoints/logs (rank 0).")
 
     # --- dataset / sampling
     p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--val-batch-size", type=int, default=4)
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--pin-mem", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--persistent-workers", action=argparse.BooleanOptionalAction, default=True)
@@ -58,6 +60,7 @@ def _parse_args() -> argparse.Namespace:
 
     # --- logging / checkpointing
     p.add_argument("--log-freq", type=int, default=20)
+    p.add_argument("--val-freq", type=int, default=10, help="Run validation every N training steps (0 disables).")
     p.add_argument("--save-every-epochs", type=int, default=1)
 
     # --- distributed
