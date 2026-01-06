@@ -9,7 +9,6 @@ import torch
 import random
 import numpy as np
 import wandb
-from omegaconf import OmegaConf
 
 def set_seed(seed_value):
     """

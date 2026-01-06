@@ -1,0 +1,57 @@
+# config.yaml
+
+# --- I/O ---
+# data_path is a list (action="append")
+data_path:
+  - "/nas/manu/ssv2/data/train.csv"
+val_data_path:
+  - "/nas/manu/ssv2/data/validation.csv"
+
+output_dir: "./outputs/debug" # make it .outputs/wandb_name
+checkpoint: null
+eval_only: false
+
+# --- Dataset / Sampling ---
+batch_size: 128
+val_batch_size: 16
+num_workers: 8
+pin_mem: true
+persistent_workers: true
+drop_last: true
+deterministic_loader: true
+
+frames_per_clip: 4
+num_clips: 1
+random_clip_sampling: true
+allow_clip_overlap: false
+
+# Mutually exclusive constraints (Choose one, set others to null)
+# Default behavior: frame_step=4 if all are null.
+frame_step: 4
+fps: null 
+duration: null 
+
+crop_size: 224
+
+# --- Model ---
+dino_repo: "facebookresearch/dinov2"
+dino_model: "dinov2_vits14"
+dino_pretrained: true
+freeze_dino: true
+mlp_hidden_dim: 1024
+mlp_out_dim: 512
+num_classes: 174
+
+# --- Optimization ---
+epochs: 1
+lr: 1.0e-4
+weight_decay: 0.05
+grad_accum: 1
+
+# --- Logging / Checkpointing ---
+val_freq: 8
+log_freq: 20
+save_every_epochs: 1
+
+# --- Distributed ---
+dist_port: 37129

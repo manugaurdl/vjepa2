@@ -35,7 +35,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from app.vjepa.transforms import make_transforms
-from root.argparse import _parse_args, _resolve_sampling_kwargs
+import root.args as parser #import _parse_args, _resolve_sampling_kwargs
 from root.model import _build_model
 import root.utils as utils
 from root.ddp import _wrap_ddp, _ddp_mean, _is_distributed
@@ -88,9 +88,7 @@ def run_validation(
     model.train()
     return mean_loss, acc
 
-def main() -> None:
-    args = _parse_args()
-
+def main(args) -> None:
     # torchrun compatibility: prefer env vars if available, but still call repo helper.
     env_rank = utils._env_int("RANK", None)
     env_world = utils._env_int("WORLD_SIZE", None)
@@ -107,7 +105,7 @@ def main() -> None:
 
     # --- data
     transform = make_transforms(crop_size=args.crop_size)
-    sampling_kwargs = _resolve_sampling_kwargs(args)
+    sampling_kwargs = parser._resolve_sampling_kwargs(args)
 
     _dataset, loader, sampler = make_videodataset(
         data_paths=args.data_path,
@@ -232,6 +230,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     utils.set_seed(42)
-    main()
+    config = parser.prepare_config()
+    # utils.init_wandb(args)
+    main(config)
 
  
