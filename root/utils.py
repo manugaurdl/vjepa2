@@ -6,6 +6,35 @@ from typing import Iterable, Optional
 
 import torch
 
+import random
+import numpy as np
+import wandb
+from omegaconf import OmegaConf
+
+def set_seed(seed_value):
+    """
+    Set seed for reproducibility.
+    """
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+    torch.manual_seed(seed_value)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed_value)
+
+def init_wandb(args, resume_run_id=None, fork=False):
+    if args.wandb.logging and (not args.wandb.sweep) :
+        if (resume_run_id is not None):
+                if not fork:
+                    wandb.init(id=resume_run_id, resume='must', entity=args.wandb.entity, project=args.wandb.project, config=OmegaConf.to_container(args, resolve=True))
+                else:
+                    wandb.init(
+                        project=args.wandb.project,
+                        entity=args.wandb.entity,
+                        fork_from=f"{resume_run_id}?_step={str(args.wandb.restart_iter)}",
+                        )
+        else:
+            wandb.init(entity=args.wandb.entity, project=args.wandb.project, config=OmegaConf.to_container(args, resolve=True))
+        wandb.run.name = args.wandb.run_name
 
 def int2mil(number):
     if abs(number) >= 100_000:

@@ -37,12 +37,12 @@ from torch.nn.parallel import DistributedDataParallel
 from app.vjepa.transforms import make_transforms
 from root.argparse import _parse_args, _resolve_sampling_kwargs
 from root.model import _build_model
-from root.utils import _env_int, _get_device, _iter_batches
+import root.utils as utils
 from root.ddp import _wrap_ddp, _ddp_mean, _is_distributed
 from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
 from src.utils.logging import AverageMeter, get_logger
-
+import wandb
 
 logger = get_logger(__name__, force=True)
 
@@ -65,7 +65,7 @@ def run_validation(
     correct = torch.tensor(0.0, device=device)
     total = torch.tensor(0.0, device=device)
     loss_sum = torch.tensor(0.0, device=device)
-    for batch in tqdm(_iter_batches(loader), total=len(loader), desc=f"Validating epoch {epoch}"):
+    for batch in tqdm(utils._iter_batches(loader), total=len(loader), desc=f"Validating epoch {epoch}"):
         clips = batch.clips
         x = clips[0] if isinstance(clips, (list, tuple)) else clips
         x = x.to(device, non_blocking=True)
@@ -92,11 +92,11 @@ def main() -> None:
     args = _parse_args()
 
     # torchrun compatibility: prefer env vars if available, but still call repo helper.
-    env_rank = _env_int("RANK", None)
-    env_world = _env_int("WORLD_SIZE", None)
+    env_rank = utils._env_int("RANK", None)
+    env_world = utils._env_int("WORLD_SIZE", None)
     world_size, rank = init_distributed(port=args.dist_port, rank_and_world_size=(env_rank, env_world))
 
-    device = _get_device()
+    device = utils._get_device()
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
@@ -180,7 +180,7 @@ def main() -> None:
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        for it, batch in tqdm(enumerate(_iter_batches(loader)), total=len(loader), desc=f"train epoch {epoch}"):
+        for it, batch in tqdm(enumerate(utils._iter_batches(loader)), total=len(loader), desc=f"train epoch {epoch}"):
             t0 = time.time()
 
             clips = batch.clips
@@ -207,7 +207,6 @@ def main() -> None:
                     f"bs={args.batch_size} world={world_size}"
                 )
 
-
             if (global_step % args.val_freq == 0):
                 _vloss, acc = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
                 if acc > global_vars["best_acc"]:
@@ -232,6 +231,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    utils.set_seed(42)
     main()
 
  
