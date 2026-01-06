@@ -10,7 +10,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--data-path", action="append", required=True, help="CSV or NPY path. Repeatable.")
     p.add_argument("--output-dir", default="./outputs/min_train", help="Where to write checkpoints/logs (rank 0).")
     p.add_argument("--val-data-path", required=True, help="CSV or NPY path")
-    p.add_argument("--debug", type=bool, default=False)
+    p.add_argument("--debug", action="store_true") 
 
     # --- dataset / sampling
     p.add_argument("--batch-size", type=int, default=4)
@@ -60,6 +60,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--grad-accum", type=int, default=1)
 
     # --- logging / checkpointing
+    p.add_argument("--val-freq", type=int, default=8)
     p.add_argument("--log-freq", type=int, default=20)
     p.add_argument("--save-every-epochs", type=int, default=1)
 

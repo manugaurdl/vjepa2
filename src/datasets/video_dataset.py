@@ -47,6 +47,7 @@ def make_videodataset(
     persistent_workers=True,
     deterministic=True,
     log_dir=None,
+    debug=False,
 ):
     dataset = VideoDataset(
         data_paths=data_paths,
@@ -63,6 +64,7 @@ def make_videodataset(
         filter_long_videos=filter_long_videos,
         shared_transform=shared_transform,
         transform=transform,
+        debug=debug,
     )
 
     log_dir = pathlib.Path(log_dir) if log_dir else None
@@ -131,6 +133,7 @@ class VideoDataset(torch.utils.data.Dataset):
         filter_short_videos=False,
         filter_long_videos=int(10**9),
         duration=None,  # duration in seconds
+        debug = False,
     ):
         self.data_paths = data_paths
         self.datasets_weights = datasets_weights
@@ -144,6 +147,7 @@ class VideoDataset(torch.utils.data.Dataset):
         self.filter_long_videos = filter_long_videos
         self.duration = duration
         self.fps = fps
+        self.debug = debug
 
         if sum([v is not None for v in (fps, duration, frame_step)]) != 1:
             raise ValueError(f"Must specify exactly one of either {fps=}, {duration=}, or {frame_step=}.")
@@ -370,4 +374,7 @@ class VideoDataset(torch.utils.data.Dataset):
         return buffer, clip_indices
 
     def __len__(self):
+        if self.debug:
+            return 640
+        
         return len(self.samples)

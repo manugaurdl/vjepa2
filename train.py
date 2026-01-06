@@ -46,9 +46,12 @@ from src.utils.logging import AverageMeter, get_logger
 
 logger = get_logger(__name__, force=True)
 
+global_vars = {
+    "best_acc": 0.0,
+}
 
 @torch.no_grad()
-def validate(
+def run_validation(
     model: torch.nn.Module,
     loader,
     device: torch.device,
@@ -124,6 +127,7 @@ def main() -> None:
         persistent_workers=args.persistent_workers,
         deterministic=args.deterministic_loader,
         log_dir=(os.path.join(args.output_dir, "dataloader_logs") if is_master else None),
+        debug=args.debug,
         **sampling_kwargs,
     )
 
@@ -145,6 +149,7 @@ def main() -> None:
         persistent_workers=args.persistent_workers,
         deterministic=True,
         log_dir=None,
+        debug=args.debug,
         **sampling_kwargs,
     )
 
@@ -161,10 +166,10 @@ def main() -> None:
     global_step = 0
     
     if not args.debug:
-        _vloss, best_acc = validate(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
+        print("|RUNNING INITIAL VALIDATION...")
+        _vloss, global_vars["best_acc"] = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
         ###acc should be maintained. it will be used to save checkpoint if it is better than the previous one.
 
-    
     for epoch in range(args.epochs):
         if sampler is not None and hasattr(sampler, "set_epoch"):
             sampler.set_epoch(epoch)
@@ -175,7 +180,7 @@ def main() -> None:
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        for it, batch in enumerate(_iter_batches(loader)):
+        for it, batch in tqdm(enumerate(_iter_batches(loader)), total=len(loader), desc=f"train epoch {epoch}"):
             t0 = time.time()
 
             clips = batch.clips
@@ -202,18 +207,22 @@ def main() -> None:
                     f"bs={args.batch_size} world={world_size}"
                 )
 
-            global_step += 1
 
-        if is_master and args.save_every_epochs > 0 and ((epoch + 1) % args.save_every_epochs == 0):
-            ckpt_path = os.path.join(args.output_dir, f"ckpt_epoch_{epoch:04d}.pt")
-            to_save = {
-                "epoch": epoch,
-                "model": model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict(),
-                "opt": optimizer.state_dict(),
-                "args": vars(args),
-            }
-            torch.save(to_save, ckpt_path)
-            logger.info(f"Saved checkpoint: {ckpt_path}")
+            if (global_step % args.val_freq == 0):
+                _vloss, acc = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
+                if acc > global_vars["best_acc"]:
+                    global_vars["best_acc"] = acc
+                    ckpt_path = os.path.join(args.output_dir, f"best.pt")
+                    to_save = {
+                        "epoch": epoch,
+                        "model": model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict(),
+                        "opt": optimizer.state_dict(),
+                        "args": vars(args),
+                    }
+                    torch.save(to_save, ckpt_path)
+                    logger.info(f"Saved checkpoint: {ckpt_path}")
+                
+            global_step += 1
 
         if _is_distributed(world_size):
             dist.barrier()
