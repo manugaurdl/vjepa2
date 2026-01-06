@@ -9,9 +9,12 @@ def _parse_args() -> argparse.Namespace:
     # --- I/O
     p.add_argument("--data-path", action="append", required=True, help="CSV or NPY path. Repeatable.")
     p.add_argument("--output-dir", default="./outputs/min_train", help="Where to write checkpoints/logs (rank 0).")
+    p.add_argument("--val-data-path", required=True, help="CSV or NPY path")
+    p.add_argument("--debug", type=bool, default=False)
 
     # --- dataset / sampling
     p.add_argument("--batch-size", type=int, default=4)
+    p.add_argument("--val-batch-size", type=int, default=16)
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--pin-mem", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--persistent-workers", action=argparse.BooleanOptionalAction, default=True)

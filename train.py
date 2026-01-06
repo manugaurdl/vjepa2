@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import time
+from tqdm import tqdm
 
 import torch
 import torch.distributed as dist
@@ -45,6 +46,44 @@ from src.utils.logging import AverageMeter, get_logger
 
 logger = get_logger(__name__, force=True)
 
+
+@torch.no_grad()
+def validate(
+    model: torch.nn.Module,
+    loader,
+    device: torch.device,
+    world_size: int,
+    *,
+    epoch: int,
+    step: int,
+    is_master: bool,
+) -> tuple[float, float]:
+    model.eval()
+    correct = torch.tensor(0.0, device=device)
+    total = torch.tensor(0.0, device=device)
+    loss_sum = torch.tensor(0.0, device=device)
+    for batch in tqdm(_iter_batches(loader), total=len(loader), desc=f"Validating epoch {epoch}"):
+        clips = batch.clips
+        x = clips[0] if isinstance(clips, (list, tuple)) else clips
+        x = x.to(device, non_blocking=True)
+        y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
+        logits = model(x)
+        loss_sum += F.cross_entropy(logits, y, reduction="sum")
+        pred = logits.argmax(dim=1)
+        correct += (pred == y).float().sum()
+        total += float(y.numel())
+
+    if _is_distributed(world_size):
+        dist.all_reduce(correct, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total, op=dist.ReduceOp.SUM)
+        dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+
+    acc = (correct / total.clamp_min(1.0)).item()
+    mean_loss = (loss_sum / total.clamp_min(1.0)).item()
+    if is_master:
+        print(f"val epoch_num={epoch} step_num={step} mean_loss={mean_loss:.4f} mean_acc={acc:.4f}", flush=True)
+    model.train()
+    return mean_loss, acc
 
 def main() -> None:
     args = _parse_args()
@@ -88,6 +127,27 @@ def main() -> None:
         **sampling_kwargs,
     )
 
+    _vd, val_loader, val_sampler = make_videodataset(
+        data_paths=args.val_data_path,
+        batch_size=(args.val_batch_size or args.batch_size),
+        frames_per_clip=args.frames_per_clip,
+        num_clips=args.num_clips,
+        random_clip_sampling=False,
+        allow_clip_overlap=args.allow_clip_overlap,
+        transform=transform,
+        shared_transform=None,
+        rank=rank,
+        world_size=world_size,
+        collator=None,
+        drop_last=False,
+        num_workers=args.num_workers,
+        pin_mem=args.pin_mem,
+        persistent_workers=args.persistent_workers,
+        deterministic=True,
+        log_dir=None,
+        **sampling_kwargs,
+    )
+
     # --- model / opt
     model = _build_model(args, device)
     model = _wrap_ddp(model, device, world_size)
@@ -99,6 +159,12 @@ def main() -> None:
 
     # --- train
     global_step = 0
+    
+    if not args.debug:
+        _vloss, best_acc = validate(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
+        ###acc should be maintained. it will be used to save checkpoint if it is better than the previous one.
+
+    
     for epoch in range(args.epochs):
         if sampler is not None and hasattr(sampler, "set_epoch"):
             sampler.set_epoch(epoch)
