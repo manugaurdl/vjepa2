@@ -82,4 +82,14 @@ def _iter_batches(loader: Iterable) -> Iterable[TrainBatch]:
             labels = torch.as_tensor(labels)
         yield TrainBatch(clips=clips, labels=labels)
 
+def save_checkpoint(optimizer, args, epoch, global_step, state_dict, logger):
+    ckpt_path = os.path.join(args.output_dir, f"best.pt")
+    to_save = {
+        "epoch": epoch,
+        "model": state_dict,
+        "opt": optimizer.state_dict(),
+        "args": vars(args),
+    }
+    torch.save(to_save, ckpt_path)
+    logger.info(f"Saved checkpoint: {ckpt_path}")
 

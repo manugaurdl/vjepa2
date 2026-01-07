@@ -38,6 +38,7 @@ from app.vjepa.transforms import make_transforms
 import root.args as parser #import _parse_args, _resolve_sampling_kwargs
 from root.model import _build_model
 import root.utils as utils
+import root.dataset as dataset
 from root.ddp import _wrap_ddp, _ddp_mean, _is_distributed
 from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
@@ -107,50 +108,8 @@ def main(args) -> None:
     transform = make_transforms(crop_size=args.crop_size)
     sampling_kwargs = parser._resolve_sampling_kwargs(args)
 
-    _dataset, loader, sampler = make_videodataset(
-        data_paths=args.data_path,
-        batch_size=args.batch_size,
-        frames_per_clip=args.frames_per_clip,
-        num_clips=args.num_clips,
-        random_clip_sampling=args.random_clip_sampling,
-        allow_clip_overlap=args.allow_clip_overlap,
-        transform=transform,
-        shared_transform=None,
-        rank=rank,
-        world_size=world_size,
-        collator=None,
-        drop_last=args.drop_last,
-        num_workers=args.num_workers,
-        pin_mem=args.pin_mem,
-        persistent_workers=args.persistent_workers,
-        deterministic=args.deterministic_loader,
-        log_dir=(os.path.join(args.output_dir, "dataloader_logs") if is_master else None),
-        debug=args.debug,
-        **sampling_kwargs,
-    )
 
-    _vd, val_loader, val_sampler = make_videodataset(
-        data_paths=args.val_data_path,
-        batch_size=(args.val_batch_size or args.batch_size),
-        frames_per_clip=args.frames_per_clip,
-        num_clips=args.num_clips,
-        random_clip_sampling=False,
-        allow_clip_overlap=args.allow_clip_overlap,
-        transform=transform,
-        shared_transform=None,
-        rank=rank,
-        world_size=world_size,
-        collator=None,
-        drop_last=False,
-        num_workers=args.num_workers,
-        pin_mem=args.pin_mem,
-        persistent_workers=args.persistent_workers,
-        deterministic=True,
-        log_dir=None,
-        debug=args.debug,
-        **sampling_kwargs,
-    )
-
+    train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master)
     # --- model / opt
     model = _build_model(args, device)
     model = _wrap_ddp(model, device, world_size)
@@ -169,8 +128,8 @@ def main(args) -> None:
         ###acc should be maintained. it will be used to save checkpoint if it is better than the previous one.
 
     for epoch in range(args.epochs):
-        if sampler is not None and hasattr(sampler, "set_epoch"):
-            sampler.set_epoch(epoch)
+        if train_sampler is not None and hasattr(train_sampler, "set_epoch"):
+            train_sampler.set_epoch(epoch)
 
         loss_meter = AverageMeter()
         it_time = AverageMeter()
@@ -178,7 +137,7 @@ def main(args) -> None:
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        for it, batch in tqdm(enumerate(utils._iter_batches(loader)), total=len(loader), desc=f"train epoch {epoch}"):
+        for it, batch in tqdm(enumerate(utils._iter_batches(train_loader)), total=len(train_loader), desc=f"train epoch {epoch}"):
             t0 = time.time()
 
             clips = batch.clips
@@ -193,7 +152,7 @@ def main(args) -> None:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
-            # Logging
+            # Logging ###???????
             loss_reduced = _ddp_mean(loss.detach() * max(args.grad_accum, 1)).item()
             loss_meter.update(loss_reduced, n=x.size(0))
             it_time.update((time.time() - t0) * 1000.0)
@@ -209,15 +168,7 @@ def main(args) -> None:
                 _vloss, acc = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
                 if acc > global_vars["best_acc"]:
                     global_vars["best_acc"] = acc
-                    ckpt_path = os.path.join(args.output_dir, f"best.pt")
-                    to_save = {
-                        "epoch": epoch,
-                        "model": model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict(),
-                        "opt": optimizer.state_dict(),
-                        "args": vars(args),
-                    }
-                    torch.save(to_save, ckpt_path)
-                    logger.info(f"Saved checkpoint: {ckpt_path}")
+                    utils.save_checkpoint(optimizer, args, epoch, global_step, model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict(), logger)
                 
             global_step += 1
 
@@ -226,6 +177,7 @@ def main(args) -> None:
 
     if _is_distributed(world_size):
         dist.destroy_process_group()
+
 
 
 if __name__ == "__main__":
