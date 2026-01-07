@@ -375,6 +375,6 @@ class VideoDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         if self.debug:
-            return 640
+            return 2000
         
         return len(self.samples)

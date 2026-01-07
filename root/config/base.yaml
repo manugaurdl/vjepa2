@@ -10,10 +10,11 @@ val_data_path:
 output_dir: "./outputs/debug" # make it .outputs/wandb_name
 checkpoint: null
 eval_only: false
+init_eval: true
 
 # --- Dataset / Sampling ---
 batch_size: 128
-val_batch_size: 16
+val_batch_size: 128
 num_workers: 8
 pin_mem: true
 persistent_workers: true
@@ -49,9 +50,18 @@ weight_decay: 0.05
 grad_accum: 1
 
 # --- Logging / Checkpointing ---
-val_freq: 8
+val_freq: 200
 log_freq: 20
 save_every_epochs: 1
 
 # --- Distributed ---
 dist_port: 37129
+
+wandb:
+  logging : True
+  sweep : False
+  sweep_run_count : 100
+  entity : "manugaur"
+  project : "fair_project"
+  run_name : dummy
+  fork : False

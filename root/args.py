@@ -3,33 +3,81 @@ from __future__ import annotations
 import argparse
 import os
 import yaml
+import sys
+
+
+def flatten_config(config, parent_key='', sep='.'):
+    items = []
+    for k, v in config.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_config(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+# 2. Helper to convert a dictionary back to a nested Namespace
+def dict_to_namespace(d):
+    x = argparse.Namespace()
+    for k, v in d.items():
+        if isinstance(v, dict):
+            setattr(x, k, dict_to_namespace(v))
+        else:
+            setattr(x, k, v)
+    return x
 
 def prepare_config():
     #load config
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument('--config', type=str, required=True, help='Name of config file in root/config')
     
-    args, unknown_args = pre_parser.parse_known_args()
+    args, _ = pre_parser.parse_known_args()
 
     #load .yaml
     config_path = os.path.join('root', 'config', args.config + '.yaml')
     with open(config_path, 'r') as f:
-        config_data = yaml.safe_load(f)
+        yaml_data = yaml.safe_load(f)
+    
+    flat_config = flatten_config(yaml_data)
 
     # create and populate main parser
     parser = argparse.ArgumentParser(parents=[pre_parser])
     
     ### args that are not in the config file
     parser.add_argument("--debug", action="store_true", default=False, help="Enable debug mode")
-    
-    for key, value in config_data.items():
-        if isinstance(value, bool):
-            parser.add_argument(f'--{key}', type=bool, default=value)
-        else:
-            parser.add_argument(f'--{key}', type=type(value), default=value)
 
-    final_args = parser.parse_args()    
-    return final_args
+    for key, value in flat_config.items():
+        # Handle Booleans (creates --wandb.logging and --no-wandb.logging)
+        if isinstance(value, bool):
+            parser.add_argument(
+                f"--{key}", 
+                action=argparse.BooleanOptionalAction, 
+                default=value,
+                dest=key # Explicitly set dest to maintain dot notation in the internal dict
+            )
+        else:
+            # Handle None values safely (default to str if None)
+            val_type = type(value) if value is not None else str
+            parser.add_argument(f"--{key}", type=val_type, default=value, dest=key)
+
+    parsed_args = parser.parse_args()
+    
+    # Convert flattened args back to nested dictionary
+    args_dict = vars(parsed_args)
+    nested_dict = {}
+    
+    for key, value in args_dict.items():
+        parts = key.split('.')
+        d = nested_dict
+        for part in parts[:-1]:
+            if part not in d:
+                d[part] = {}
+            d = d[part]
+        d[parts[-1]] = value
+
+    # Convert nested dictionary to nested Namespace for dot-access
+    final_ns = dict_to_namespace(nested_dict)
+    return final_ns
 
 
 def _resolve_sampling_kwargs(args: argparse.Namespace) -> dict:

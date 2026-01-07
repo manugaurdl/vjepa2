@@ -32,7 +32,7 @@ def init_wandb(args, resume_run_id=None, fork=False):
                         fork_from=f"{resume_run_id}?_step={str(args.wandb.restart_iter)}",
                         )
         else:
-            wandb.init(entity=args.wandb.entity, project=args.wandb.project, config=OmegaConf.to_container(args, resolve=True))
+            wandb.init(entity=args.wandb.entity, project=args.wandb.project, config=vars(args))
         wandb.run.name = args.wandb.run_name
 
 def int2mil(number):

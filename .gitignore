@@ -1,4 +1,5 @@
 .venv
+wandb/
 outputs/
 *.pyc
 .vscode/

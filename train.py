@@ -49,6 +49,7 @@ logger = get_logger(__name__, force=True)
 
 global_vars = {
     "best_acc": 0.0,
+    "global_step": 0,
 }
 
 @torch.no_grad()
@@ -85,7 +86,10 @@ def run_validation(
     acc = (correct / total.clamp_min(1.0)).item()
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
     if is_master:
-        print(f"val epoch_num={epoch} step_num={step} mean_loss={mean_loss:.4f} mean_acc={acc:.4f}", flush=True)
+        wandb.log({
+            "eval/loss": mean_loss,
+            "eval/acc": acc,
+        }, step=global_vars["global_step"])
     model.train()
     return mean_loss, acc
 
@@ -122,7 +126,7 @@ def main(args) -> None:
     # --- train
     global_step = 0
     
-    if not args.debug:
+    if args.init_eval and not args.debug:
         print("|RUNNING INITIAL VALIDATION...")
         _vloss, global_vars["best_acc"] = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
         ###acc should be maintained. it will be used to save checkpoint if it is better than the previous one.
@@ -157,20 +161,26 @@ def main(args) -> None:
             loss_meter.update(loss_reduced, n=x.size(0))
             it_time.update((time.time() - t0) * 1000.0)
 
-            if is_master and (global_step % args.log_freq == 0):
-                logger.info(
-                    f"epoch={epoch} step={global_step} "
-                    f"loss={loss_meter.avg:.4f} iter_ms={it_time.avg:.1f} "
-                    f"bs={args.batch_size} world={world_size}"
-                )
+            if is_master:
+                # logger.info(
+                #     f"epoch={epoch} step={global_step} "
+                #     f"loss={loss_meter.avg:.4f} iter_ms={it_time.avg:.1f} "
+                #     f"bs={args.batch_size} world={world_size}"
+                # )
+                wandb.log({
+                    "trainer/epoch": epoch,
+                    "trainer/step": global_vars["global_step"],
+                    "trainer/loss": loss_meter.avg,
+                    "trainer/lr": optimizer.param_groups[0]["lr"],
+                }, step=global_vars["global_step"])
 
-            if (global_step % args.val_freq == 0):
+            if (global_vars["global_step"]+1) % args.val_freq == 0:
                 _vloss, acc = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
                 if acc > global_vars["best_acc"]:
                     global_vars["best_acc"] = acc
                     utils.save_checkpoint(optimizer, args, epoch, global_step, model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict(), logger)
                 
-            global_step += 1
+            global_vars["global_step"] += 1
 
         if _is_distributed(world_size):
             dist.barrier()
@@ -182,8 +192,8 @@ def main(args) -> None:
 
 if __name__ == "__main__":
     utils.set_seed(42)
-    config = parser.prepare_config()
-    # utils.init_wandb(args)
-    main(config)
+    args = parser.prepare_config()
+    utils.init_wandb(args)
+    main(args)
 
  
