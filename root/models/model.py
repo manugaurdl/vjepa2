@@ -5,6 +5,8 @@ import argparse
 import torch
 import torch.nn as nn
 
+from root.models.encoder import build_encoder
+
 
 def _dinov2_frame_features(dino: nn.Module, x: torch.Tensor) -> torch.Tensor:
     """
@@ -34,7 +36,7 @@ def _dinov2_frame_features(dino: nn.Module, x: torch.Tensor) -> torch.Tensor:
     raise RuntimeError(f"Unsupported Dinov2 output type: {type(out)}")
 
 
-class DinoFrameMLPClassifier(nn.Module):
+class DinoFrameEncoder(nn.Module):
     """
     (B, C, T, H, W) video -> Dinov2 per-frame features -> per-frame MLP -> meanpool over T -> linear classifier
     """
@@ -43,8 +45,7 @@ class DinoFrameMLPClassifier(nn.Module):
         self,
         dino: nn.Module,
         dino_dim: int,
-        mlp_hidden_dim: int,
-        mlp_out_dim: int,
+        encoder_cfg: argparse.Namespace,
         num_classes: int,
         freeze_dino: bool = True,
     ):
@@ -52,16 +53,8 @@ class DinoFrameMLPClassifier(nn.Module):
         self.dino = dino
         self.freeze_dino = freeze_dino
 
-        self.frame_mlp = nn.Sequential(
-            nn.Linear(dino_dim, mlp_hidden_dim),
-            nn.GELU(),
-            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
-            nn.GELU(),
-            nn.Linear(mlp_hidden_dim, mlp_hidden_dim),
-            nn.GELU(),
-            nn.Linear(mlp_hidden_dim, mlp_out_dim),
-        )
-        self.head = nn.Linear(mlp_out_dim, num_classes)
+        self.encoder, encoder_out_dim = build_encoder(encoder_cfg, input_dim=dino_dim)
+        self.head = nn.Linear(encoder_out_dim, num_classes)
 
         if self.freeze_dino:
             for p in self.dino.parameters():
@@ -88,7 +81,7 @@ class DinoFrameMLPClassifier(nn.Module):
             f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
 
         f = f.reshape(B, T, -1)  # (B, T, D)
-        f = self.frame_mlp(f)  # (B, T, M)
+        f = self.encoder(f)  # (B, T, M)
         pooled = f.mean(dim=1)  # (B, M)
         return self.head(pooled)
 
@@ -111,11 +104,10 @@ def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
         dummy = torch.zeros(1, 3, args.crop_size, args.crop_size)
         d = int(_dinov2_frame_features(dino, dummy).shape[-1])
 
-    model = DinoFrameMLPClassifier(
+    model = DinoFrameEncoder(
         dino=dino,
         dino_dim=d,
-        mlp_hidden_dim=args.mlp_hidden_dim,
-        mlp_out_dim=args.mlp_out_dim,
+        encoder_cfg=args.encoder,
         num_classes=args.num_classes,
         freeze_dino=args.freeze_dino,
     )

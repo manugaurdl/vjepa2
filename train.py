@@ -36,7 +36,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from app.vjepa.transforms import make_transforms
 import root.args as parser #import _parse_args, _resolve_sampling_kwargs
-from root.model import _build_model
+from root.models.model import _build_model
 import root.utils as utils
 import root.dataset as dataset
 from root.ddp import _wrap_ddp, _ddp_mean, _is_distributed
@@ -85,7 +85,7 @@ def run_validation(
 
     acc = (correct / total.clamp_min(1.0)).item()
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
-    if is_master:
+    if is_master and args.wandb.logging:
         wandb.log({
             "eval/loss": mean_loss,
             "eval/acc": acc,
@@ -126,7 +126,7 @@ def main(args) -> None:
     # --- train
     global_step = 0
     
-    if args.init_eval and not args.debug:
+    if args.init_eval:
         print("|RUNNING INITIAL VALIDATION...")
         _vloss, global_vars["best_acc"] = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
         ###acc should be maintained. it will be used to save checkpoint if it is better than the previous one.
@@ -161,7 +161,7 @@ def main(args) -> None:
             loss_meter.update(loss_reduced, n=x.size(0))
             it_time.update((time.time() - t0) * 1000.0)
 
-            if is_master:
+            if is_master and args.wandb.logging:
                 # logger.info(
                 #     f"epoch={epoch} step={global_step} "
                 #     f"loss={loss_meter.avg:.4f} iter_ms={it_time.avg:.1f} "
@@ -193,7 +193,8 @@ def main(args) -> None:
 if __name__ == "__main__":
     utils.set_seed(42)
     args = parser.prepare_config()
-    utils.init_wandb(args)
+    if args.wandb.logging:
+        utils.init_wandb(args)
     main(args)
 
  
