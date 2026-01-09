@@ -173,6 +173,7 @@ def main(args) -> None:
                     "trainer/step": global_vars["global_step"],
                     "trainer/loss": loss_meter.avg,
                     "trainer/lr": optimizer.param_groups[0]["lr"],
+                    "trainer/iter_ms_avg": it_time.avg,
                 }, step=global_vars["global_step"])
 
             if (global_vars["global_step"]+1) % args.val_freq == 0:

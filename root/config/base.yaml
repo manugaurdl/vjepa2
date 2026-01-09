@@ -21,6 +21,7 @@ persistent_workers: true
 drop_last: true
 deterministic_loader: true
 
+eval_frames_per_clip: 16
 frames_per_clip: 4
 num_clips: 1
 random_clip_sampling: true
@@ -42,7 +43,7 @@ freeze_dino: true
 encoder:
   type: "transformer" #["transformer", "mlp"]
   transformer:
-    hidden_dim: 384
+    hidden_dim: 1024
     depth: 4
     n_heads: 8
   mlp:
