@@ -292,7 +292,8 @@ class VideoDataset(torch.utils.data.Dataset):
             if partition_len > clip_len i.e (long video, small frames_per_clip and stride):
                 sample a random window of clip_len frames from that partition
             else (get long clip from smaller partition):
-                if partition overlap not allowed:
+                
+                if partition overlap not allowed: <----allow_clip_overlap=False by default
                     repeat last frame
                 else:
                     (i+1)th clip start index will lie within ith partition
@@ -352,7 +353,6 @@ class VideoDataset(torch.utils.data.Dataset):
 
         all_indices, clip_indices = [], []
         for i in range(self.num_clips):
-
             if partition_len > clip_len:
                 # If partition_len > clip len, then sample a random window of
                 # clip_len frames within the segment

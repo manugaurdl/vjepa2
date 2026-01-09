@@ -49,7 +49,7 @@ encoder:
   mlp:
     hidden_dim: 1024
     output_dim: 512
-
+pooling: "mean" # ["mean", "concat"]
 num_classes: 174
 
 # --- Optimization ---

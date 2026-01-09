@@ -47,14 +47,20 @@ class DinoFrameEncoder(nn.Module):
         dino_dim: int,
         encoder_cfg: argparse.Namespace,
         num_classes: int,
+        pooling: str = "mean",
         freeze_dino: bool = True,
     ):
         super().__init__()
         self.dino = dino
         self.freeze_dino = freeze_dino
+        self.pooling = pooling
 
         self.encoder, encoder_out_dim = build_encoder(encoder_cfg, input_dim=dino_dim)
-        self.head = nn.Linear(encoder_out_dim, num_classes)
+        if self.pooling == "concat":
+            head_in_dim = encoder_out_dim * frames_per_clip
+        elif self.pooling == "mean":
+            head_in_dim = encoder_out_dim
+        self.head = nn.Linear(head_in_dim, num_classes)
 
         if self.freeze_dino:
             for p in self.dino.parameters():
@@ -82,11 +88,16 @@ class DinoFrameEncoder(nn.Module):
 
         f = f.reshape(B, T, -1)  # (B, T, D)
         f = self.encoder(f)  # (B, T, M)
-        pooled = f.mean(dim=1)  # (B, M)
+        if self.pooling == "mean":
+            pooled = f.mean(dim=1)
+        elif self.pooling == "concat":
+            pooled = f.reshape(B, -1)  # (B, T*M)
         return self.head(pooled)
 
 
 def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
+    if args.pooling == "concat" and (args.eval_frames_per_clip != args.frames_per_clip):
+        raise ValueError("pooling='concat' requires frames_per_clip == eval_frames_per_clip (fixed T).")
     # Load Dinov2 as an image encoder and apply it per-frame.
     try:
         dino = torch.hub.load(args.dino_repo, args.dino_model, pretrained=args.dino_pretrained)
@@ -109,6 +120,7 @@ def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
         dino_dim=d,
         encoder_cfg=args.encoder,
         num_classes=args.num_classes,
+        pooling=args.pooling,
         freeze_dino=args.freeze_dino,
     )
     return model.to(device)
