@@ -276,6 +276,27 @@ class VideoDataset(torch.utils.data.Dataset):
 
     def loadvideo_decord(self, sample, fpc):
         """Load video content using Decord"""
+        """
+        returns buffer: [T, H, W, 3] where T = frames_per_clip * num_clips
+        *** Goal : Create clips from the video and concat them***
+
+        1. Read file with VideoReader
+        2. fstp (frame_step) = striding factor
+            if fpc=4, fstp=4, then clip_len = 16; clip will span 16 frames of original video
+        
+        partition_len = len(vr) // self.num_clips
+        if num_clips>1, create |num_clips| partitions:
+            clip i comes from the ith partition
+        
+        iterate over |num_clips| partitions:
+            if partition_len > clip_len i.e (long video, small frames_per_clip and stride):
+                sample a random window of clip_len frames from that partition
+            else (get long clip from smaller partition):
+                if partition overlap not allowed:
+                    repeat last frame
+                else:
+                    (i+1)th clip start index will lie within ith partition
+        """
 
         fname = sample
         if not os.path.exists(fname):
@@ -288,7 +309,7 @@ class VideoDataset(torch.utils.data.Dataset):
             return [], None
 
         try:
-            vr = VideoReader(fname, num_threads=-1, ctx=cpu(0))
+            vr = VideoReader(fname, num_threads=-1, ctx=cpu(0)) 
         except Exception:
             return [], None
 
@@ -309,6 +330,7 @@ class VideoDataset(torch.utils.data.Dataset):
         assert fstp is not None and fstp > 0
         clip_len = int(fpc * fstp)
 
+        #filter short videos=False
         if self.filter_short_videos and len(vr) < clip_len:
             warnings.warn(f"skipping video of length {len(vr)}")
             return [], None
@@ -318,6 +340,15 @@ class VideoDataset(torch.utils.data.Dataset):
         # Partition video into equal sized segments and sample each clip
         # from a different segment
         partition_len = len(vr) // self.num_clips
+        
+        # print("--------------------------------")
+        # print(f"len(vr): {len(vr)}")
+        # print(f"self.num_clips: {self.num_clips}")
+        # print(f"partition_len: {partition_len}")
+        # print(f"fpc (frames_per_clip): {fpc}")
+        # print(f"fstp (frame_step): {fstp}")
+        # print(f"clip_len: {clip_len}")
+        # print("--------------------------------")
 
         all_indices, clip_indices = [], []
         for i in range(self.num_clips):

@@ -64,8 +64,14 @@ def prepare_config():
     
     # Convert flattened args back to nested dictionary
     args_dict = vars(parsed_args)
-    nested_dict = {}
+
+    # Debug overrides (apply before rebuilding nested Namespace)
+    if args_dict.get("debug", False):
+        args_dict["wandb.logging"] = False
+        args_dict["num_workers"] = 0
+        args_dict["wandb.logging"] = False
     
+    nested_dict = {}
     for key, value in args_dict.items():
         parts = key.split('.')
         d = nested_dict
