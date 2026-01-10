@@ -45,7 +45,7 @@ class DinoFrameEncoder(nn.Module):
         self,
         dino: nn.Module,
         dino_dim: int,
-        encoder_cfg: argparse.Namespace,
+        args: argparse.Namespace,
         num_classes: int,
         pooling: str = "mean",
         freeze_dino: bool = True,
@@ -55,9 +55,9 @@ class DinoFrameEncoder(nn.Module):
         self.freeze_dino = freeze_dino
         self.pooling = pooling
 
-        self.encoder, encoder_out_dim = build_encoder(encoder_cfg, input_dim=dino_dim)
+        self.encoder, encoder_out_dim = build_encoder(args.encoder, input_dim=dino_dim)
         if self.pooling == "concat":
-            head_in_dim = encoder_out_dim * frames_per_clip
+            head_in_dim = encoder_out_dim * args.frames_per_clip
         elif self.pooling == "mean":
             head_in_dim = encoder_out_dim
         self.head = nn.Linear(head_in_dim, num_classes)
@@ -118,7 +118,7 @@ def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     model = DinoFrameEncoder(
         dino=dino,
         dino_dim=d,
-        encoder_cfg=args.encoder,
+        args=args,
         num_classes=args.num_classes,
         pooling=args.pooling,
         freeze_dino=args.freeze_dino,
