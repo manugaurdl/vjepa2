@@ -35,7 +35,6 @@ def _dinov2_frame_features(dino: nn.Module, x: torch.Tensor) -> torch.Tensor:
         return out
     raise RuntimeError(f"Unsupported Dinov2 output type: {type(out)}")
 
-
 class DinoFrameEncoder(nn.Module):
     """
     (B, C, T, H, W) video -> Dinov2 per-frame features -> per-frame MLP -> meanpool over T -> linear classifier

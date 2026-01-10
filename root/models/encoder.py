@@ -27,7 +27,7 @@ class Transformer(nn.Module):
         self.encoder = Encoder(dim=hidden_dim, depth=depth, heads=n_heads)
         self.out_dim = int(output_dim) if output_dim is not None else int(hidden_dim)
         # self.out_proj = nn.Identity() if self.out_dim == hidden_dim else nn.Linear(hidden_dim, self.out_dim)
-
+        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.in_proj(x)
         return self.encoder(x)
