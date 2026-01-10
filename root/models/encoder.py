@@ -24,7 +24,7 @@ class Transformer(nn.Module):
         from x_transformers import Encoder  # type: ignore
 
         self.in_proj = nn.Identity() if input_dim == hidden_dim else nn.Linear(input_dim, hidden_dim)
-        self.encoder = Encoder(dim=hidden_dim, depth=depth, heads=n_heads)
+        self.encoder = Encoder(dim=hidden_dim, depth=depth, heads=n_heads, attn_dim_head = (hidden_dim // n_heads))
         self.out_dim = int(output_dim) if output_dim is not None else int(hidden_dim)
         # self.out_proj = nn.Identity() if self.out_dim == hidden_dim else nn.Linear(hidden_dim, self.out_dim)
         
