@@ -55,10 +55,13 @@ class DinoFrameEncoder(nn.Module):
         self.pooling = pooling
 
         self.encoder, encoder_out_dim = build_encoder(args.encoder, input_dim=dino_dim)
+        if encoder_out_dim is None:
+            encoder_out_dim = dino_dim
         if self.pooling == "concat":
             head_in_dim = encoder_out_dim * args.frames_per_clip
         elif self.pooling == "mean":
             head_in_dim = encoder_out_dim
+
         self.head = nn.Linear(head_in_dim, num_classes)
 
         if self.freeze_dino:

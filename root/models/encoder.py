@@ -52,7 +52,7 @@ class MLP(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, self.out_dim),
-        )
+        )## this is inverted ; latent should be wider. input/output dim should be same right?
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.encoder(x)
@@ -60,18 +60,18 @@ class MLP(nn.Module):
 
 def build_encoder(encoder_cfg: Any, *, input_dim: int) -> Tuple[nn.Module, int]:
     """Returns: (encoder_module, encoder_out_dim)"""
-    enc_type = getattr(encoder_cfg, "type", None)
+    enc_type = encoder_cfg.type
 
     if enc_type == "mlp":
-        mlp_cfg = getattr(encoder_cfg, "mlp", None)
-        if mlp_cfg is None:
-            raise ValueError("encoder.mlp config is required when encoder.type == 'mlp'")
+        mlp_cfg = encoder_cfg.mlp
         encoder = MLP(input_dim=input_dim, hidden_dim=mlp_cfg.hidden_dim, output_dim=mlp_cfg.output_dim)
-
-    if enc_type == "transformer":
-        tr_cfg = getattr(encoder_cfg, "transformer", None)
-        if tr_cfg is None:
-            raise ValueError("encoder.transformer config is required when encoder.type == 'transformer'")
+        out_dim = mlp_cfg.output_dim
+    elif enc_type == "linear":
+        encoder = nn.Identity()
+        out_dim = None
+    elif enc_type == "transformer":
+        tr_cfg = encoder_cfg.transformer
         encoder = Transformer(input_dim=input_dim, hidden_dim=tr_cfg.hidden_dim, depth=tr_cfg.depth, n_heads=tr_cfg.n_heads)
+        out_dim = encoder.out_dim
         
-    return encoder, encoder.out_dim
+    return encoder, out_dim

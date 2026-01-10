@@ -41,7 +41,7 @@ dino_model: "dinov2_vits14" # "dinov2_vitl14"
 dino_pretrained: true
 freeze_dino: true
 encoder:
-  type: "transformer" #["transformer", "mlp"]
+  type: "transformer" #["transformer", "mlp", "linear"]
   transformer:
     hidden_dim: 1024
     depth: 4

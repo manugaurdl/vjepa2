@@ -116,7 +116,6 @@ def main(args) -> None:
     train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master)
     # --- model / opt
     model = _build_model(args, device)
-    print(f"model.encoder params: {utils.trainable_params(model.encoder)}")
     model = _wrap_ddp(model, device, world_size)
     optimizer = torch.optim.AdamW(
         (p for p in model.parameters() if p.requires_grad),
