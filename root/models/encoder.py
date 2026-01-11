@@ -41,18 +41,21 @@ class MLP(nn.Module):
     Works on tensors (B, T, D) because `nn.Linear` applies over the last dimension.
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+    def __init__(self, input_dim: int, hidden_dim: int, num_layers: int = 4):
         super().__init__()
-        self.out_dim = int(output_dim)
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, self.out_dim),
-        )## this is inverted ; latent should be wider. input/output dim should be same right?
+        self.out_dim = int(hidden_dim)
+        if num_layers < 2:
+            raise ValueError(f"num_layers must be >= 2 (got {num_layers})")
+
+        layers: list[nn.Module] = []
+        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.GELU())
+        for _ in range(num_layers - 2):
+            layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.GELU())
+        layers.append(nn.Linear(hidden_dim, self.out_dim))
+
+        self.encoder = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.encoder(x)
@@ -64,8 +67,8 @@ def build_encoder(encoder_cfg: Any, *, input_dim: int) -> Tuple[nn.Module, int]:
 
     if enc_type == "mlp":
         mlp_cfg = encoder_cfg.mlp
-        encoder = MLP(input_dim=input_dim, hidden_dim=mlp_cfg.hidden_dim, output_dim=mlp_cfg.output_dim)
-        out_dim = mlp_cfg.output_dim
+        encoder = MLP(input_dim=input_dim, hidden_dim=mlp_cfg.hidden_dim, num_layers=mlp_cfg.num_layers)
+        out_dim = encoder.out_dim
     elif enc_type == "linear":
         encoder = nn.Identity()
         out_dim = None

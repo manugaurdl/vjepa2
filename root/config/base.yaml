@@ -48,7 +48,7 @@ encoder:
     n_heads: 8
   mlp:
     hidden_dim: 1024
-    output_dim: 512
+    num_layers: 8
 pooling: "mean" # ["mean", "concat"]
 num_classes: 174
 
