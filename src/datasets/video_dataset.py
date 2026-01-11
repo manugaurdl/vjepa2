@@ -48,6 +48,7 @@ def make_videodataset(
     deterministic=True,
     log_dir=None,
     debug=False,
+    uniform_sampling=False,
 ):
     dataset = VideoDataset(
         data_paths=data_paths,
@@ -65,6 +66,7 @@ def make_videodataset(
         shared_transform=shared_transform,
         transform=transform,
         debug=debug,
+        uniform_sampling=uniform_sampling,
     )
 
     log_dir = pathlib.Path(log_dir) if log_dir else None
@@ -134,6 +136,7 @@ class VideoDataset(torch.utils.data.Dataset):
         filter_long_videos=int(10**9),
         duration=None,  # duration in seconds
         debug = False,
+        uniform_sampling = False,
     ):
         self.data_paths = data_paths
         self.datasets_weights = datasets_weights
@@ -148,6 +151,7 @@ class VideoDataset(torch.utils.data.Dataset):
         self.duration = duration
         self.fps = fps
         self.debug = debug
+        self.uniform_sampling = uniform_sampling
 
         if sum([v is not None for v in (fps, duration, frame_step)]) != 1:
             raise ValueError(f"Must specify exactly one of either {fps=}, {duration=}, or {frame_step=}.")
@@ -277,14 +281,14 @@ class VideoDataset(torch.utils.data.Dataset):
     def loadvideo_decord(self, sample, fpc):
         """Load video content using Decord"""
         """
-        returns buffer: [T, H, W, 3] where T = frames_per_clip * num_clips
+        returns buffer: [T, H, W, 3] where T = frames_per_clip (fpc) * num_clips
         *** Goal : Create clips from the video and concat them***
 
         1. Read file with VideoReader
         2. fstp (frame_step) = striding factor
             if fpc=4, fstp=4, then clip_len = 16; clip will span 16 frames of original video
         
-        partition_len = len(vr) // self.num_clips
+        partition_len = len(vr) // self.num_clips  ## size of each segment
         if num_clips>1, create |num_clips| partitions:
             clip i comes from the ith partition
         
@@ -314,94 +318,112 @@ class VideoDataset(torch.utils.data.Dataset):
         except Exception:
             return [], None
 
-        fstp = self.frame_step
-        if self.duration is not None or self.fps is not None:
-            try:
-                video_fps = math.ceil(vr.get_avg_fps())
-            except Exception as e:
-                logger.warning(e)
-
-            if self.duration is not None:
-                assert self.fps is None
-                fstp = int(self.duration * video_fps / fpc)
-            else:
-                assert self.duration is None
-                fstp = video_fps // self.fps
-
-        assert fstp is not None and fstp > 0
-        clip_len = int(fpc * fstp)
-
-        #filter short videos=False
-        if self.filter_short_videos and len(vr) < clip_len:
-            warnings.warn(f"skipping video of length {len(vr)}")
-            return [], None
-
         vr.seek(0)  # Go to start of video before sampling frames
-
-        # Partition video into equal sized segments and sample each clip
-        # from a different segment
-        partition_len = len(vr) // self.num_clips
-        
-        # print("--------------------------------")
-        # print(f"len(vr): {len(vr)}")
-        # print(f"self.num_clips: {self.num_clips}")
-        # print(f"partition_len: {partition_len}")
-        # print(f"fpc (frames_per_clip): {fpc}")
-        # print(f"fstp (frame_step): {fstp}")
-        # print(f"clip_len: {clip_len}")
-        # print("--------------------------------")
-
+        partition_len = len(vr) // self.num_clips # Partition video into equal sized segments and sample each clip from a different segment
         all_indices, clip_indices = [], []
-        for i in range(self.num_clips):
-            if partition_len > clip_len:
-                # If partition_len > clip len, then sample a random window of
-                # clip_len frames within the segment
-                end_indx = clip_len
-                if self.random_clip_sampling:
-                    end_indx = np.random.randint(clip_len, partition_len)
-                start_indx = end_indx - clip_len
-                indices = np.linspace(start_indx, end_indx, num=fpc)
-                indices = np.clip(indices, start_indx, end_indx - 1).astype(np.int64)
-                # --
+
+        if self.uniform_sampling:
+            if self.filter_short_videos and len(vr) < fpc:
+                warnings.warn(f"skipping video of length {len(vr)}")
+                return [], None
+
+            for i in range(self.num_clips):
+                # Sample 'fpc' frames evenly across the entire partition
+                indices = np.linspace(0, partition_len - 1, num=fpc)
+                indices = np.clip(indices, 0, partition_len - 1).astype(np.int64)
+                
+                # Offset by partition index
                 indices = indices + i * partition_len
-            else:
-                # If partition overlap not allowed and partition_len < clip_len
-                # then repeatedly append the last frame in the segment until
-                # we reach the desired clip length
-                if not self.allow_clip_overlap:
-                    indices = np.linspace(0, partition_len, num=partition_len // fstp)
-                    indices = np.concatenate(
-                        (
-                            indices,
-                            np.ones(fpc - partition_len // fstp) * partition_len,
-                        )
-                    )
-                    indices = np.clip(indices, 0, partition_len - 1).astype(np.int64)
+                
+                clip_indices.append(indices)
+                all_indices.extend(list(indices))
+            
+        
+        else:
+            ##STRIDED WINDOW LOGIC: CLIP_LEN = FRAMES_PER_CLIP * FRAME_STEP
+            fstp = self.frame_step
+            if self.duration is not None or self.fps is not None:
+                try:
+                    video_fps = math.ceil(vr.get_avg_fps())
+                except Exception as e:
+                    logger.warning(e)
+
+                if self.duration is not None:
+                    assert self.fps is None
+                    fstp = int(self.duration * video_fps / fpc)
+                else:
+                    assert self.duration is None
+                    fstp = video_fps // self.fps
+
+            assert fstp is not None and fstp > 0
+            clip_len = int(fpc * fstp)
+
+            #filter short videos=False
+            if self.filter_short_videos and len(vr) < clip_len:
+                warnings.warn(f"skipping video of length {len(vr)}")
+                return [], None
+
+            
+            # print("--------------------------------")
+            # print(f"len(vr): {len(vr)}")
+            # print(f"self.num_clips: {self.num_clips}")
+            # print(f"partition_len: {partition_len}")
+            # print(f"fpc (frames_per_clip): {fpc}")
+            # print(f"fstp (frame_step): {fstp}")
+            # print(f"clip_len: {clip_len}")
+            # print("--------------------------------")
+
+            
+            for i in range(self.num_clips):
+                if partition_len > clip_len:
+                    # If partition_len > clip len, then sample a random window of
+                    # clip_len frames within the segment
+                    end_indx = clip_len
+                    if self.random_clip_sampling:
+                        end_indx = np.random.randint(clip_len, partition_len)
+                    start_indx = end_indx - clip_len
+                    indices = np.linspace(start_indx, end_indx, num=fpc)
+                    indices = np.clip(indices, start_indx, end_indx - 1).astype(np.int64)
                     # --
                     indices = indices + i * partition_len
-
-                # If partition overlap is allowed and partition_len < clip_len
-                # then start_indx of segment i+1 will lie within segment i
                 else:
-                    sample_len = min(clip_len, len(vr)) - 1
-                    indices = np.linspace(0, sample_len, num=sample_len // fstp)
-                    indices = np.concatenate(
-                        (
-                            indices,
-                            np.ones(fpc - sample_len // fstp) * sample_len,
+                    # If partition overlap not allowed and partition_len < clip_len
+                    # then repeatedly append the last frame in the segment until
+                    # we reach the desired clip length
+                    if not self.allow_clip_overlap:
+                        indices = np.linspace(0, partition_len, num=partition_len // fstp)
+                        indices = np.concatenate(
+                            (
+                                indices,
+                                np.ones(fpc - partition_len // fstp) * partition_len,
+                            )
                         )
-                    )
-                    indices = np.clip(indices, 0, sample_len - 1).astype(np.int64)
-                    # --
-                    clip_step = 0
-                    if len(vr) > clip_len:
-                        clip_step = (len(vr) - clip_len) // (self.num_clips - 1)
-                    indices = indices + i * clip_step
+                        indices = np.clip(indices, 0, partition_len - 1).astype(np.int64)
+                        # --
+                        indices = indices + i * partition_len
 
-            clip_indices.append(indices)
-            all_indices.extend(list(indices))
+                    # If partition overlap is allowed and partition_len < clip_len
+                    # then start_indx of segment i+1 will lie within segment i
+                    else:
+                        sample_len = min(clip_len, len(vr)) - 1
+                        indices = np.linspace(0, sample_len, num=sample_len // fstp)
+                        indices = np.concatenate(
+                            (
+                                indices,
+                                np.ones(fpc - sample_len // fstp) * sample_len,
+                            )
+                        )
+                        indices = np.clip(indices, 0, sample_len - 1).astype(np.int64)
+                        # --
+                        clip_step = 0
+                        if len(vr) > clip_len:
+                            clip_step = (len(vr) - clip_len) // (self.num_clips - 1)
+                        indices = indices + i * clip_step
 
-        buffer = vr.get_batch(all_indices).asnumpy()
+                clip_indices.append(indices)
+                all_indices.extend(list(indices))
+
+        buffer = vr.get_batch(all_indices).asnumpy() #get (T, H, W, 3) frames using sampled indices
         return buffer, clip_indices
 
     def __len__(self):

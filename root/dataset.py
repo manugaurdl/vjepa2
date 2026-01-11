@@ -22,6 +22,7 @@ def get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master):
         deterministic=args.deterministic_loader,
         log_dir=(os.path.join(args.output_dir, "dataloader_logs") if is_master else None),
         debug=args.debug,
+        uniform_sampling=args.uniform_sampling,
         **sampling_kwargs,
     )
 
@@ -44,6 +45,7 @@ def get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master):
         deterministic=True,
         log_dir=None,
         debug=args.debug,
+        uniform_sampling=args.uniform_sampling,
         **sampling_kwargs,
     )
 

@@ -21,13 +21,13 @@ persistent_workers: true
 drop_last: true
 deterministic_loader: true
 
-eval_frames_per_clip: 16
-eval_num_clips: 2
+eval_frames_per_clip: 8
+eval_num_clips: 1
 frames_per_clip: 4
 num_clips: 1
 random_clip_sampling: true
 allow_clip_overlap: false
-
+uniform_sampling: true
 # Mutually exclusive constraints (Choose one, set others to null)
 # Default behavior: frame_step=4 if all are null.
 frame_step: 4
