@@ -29,7 +29,7 @@ def get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master):
         data_paths=args.val_data_path,
         batch_size=(args.val_batch_size or args.batch_size),
         frames_per_clip=args.eval_frames_per_clip,
-        num_clips=args.num_clips,
+        num_clips=args.eval_num_clips,
         random_clip_sampling=False,
         allow_clip_overlap=args.allow_clip_overlap,
         transform=transform,

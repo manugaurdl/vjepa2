@@ -22,6 +22,7 @@ drop_last: true
 deterministic_loader: true
 
 eval_frames_per_clip: 16
+eval_num_clips: 2
 frames_per_clip: 4
 num_clips: 1
 random_clip_sampling: true
