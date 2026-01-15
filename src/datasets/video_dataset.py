@@ -249,7 +249,6 @@ class VideoDataset(torch.utils.data.Dataset):
             buffer = self.shared_transform(buffer)
         buffer = split_into_clips(buffer)
         if self.transform is not None:
-            import ipdb; ipdb.set_trace()
             buffer = [self.transform(clip) for clip in buffer]
 
         return buffer, label, clip_indices
