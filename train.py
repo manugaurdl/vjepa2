@@ -109,11 +109,12 @@ def main(args) -> None:
     logger.info(f"Initialized device={device}, rank/world={rank}/{world_size}")
 
     # --- data
-    transform = make_transforms(crop_size=args.crop_size)
+    train_transform = make_transforms(mode="train", crop_size=args.crop_size)
+    eval_transform = make_transforms(mode="eval", crop_size=args.crop_size)
     sampling_kwargs = parser._resolve_sampling_kwargs(args)
 
 
-    train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master)
+    train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master)
     # --- model / opt
     model = _build_model(args, device)
     model = _wrap_ddp(model, device, world_size)

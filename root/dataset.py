@@ -2,7 +2,7 @@ from src.datasets.video_dataset import make_videodataset
 
 import os
 
-def get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master):
+def get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master):
     train_ds, train_loader, train_sampler = make_videodataset(
         data_paths=args.data_path,
         batch_size=args.batch_size,
@@ -10,7 +10,7 @@ def get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master):
         num_clips=args.num_clips,
         random_clip_sampling=args.random_clip_sampling,
         allow_clip_overlap=args.allow_clip_overlap,
-        transform=transform,
+        transform=train_transform,
         shared_transform=None,
         rank=rank,
         world_size=world_size,
@@ -33,7 +33,7 @@ def get_loaders(args, transform, sampling_kwargs, rank, world_size, is_master):
         num_clips=args.eval_num_clips,
         random_clip_sampling=False,
         allow_clip_overlap=args.allow_clip_overlap,
-        transform=transform,
+        transform=eval_transform,
         shared_transform=None,
         rank=rank,
         world_size=world_size,

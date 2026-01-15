@@ -13,7 +13,7 @@ from src.datasets.utils.video.randerase import RandomErasing
 
 
 def make_transforms(
-    training=True,
+    training: bool,
     random_horizontal_flip=True,
     random_resize_aspect_ratio=(3 / 4, 4 / 3),
     random_resize_scale=(0.3, 1.0),
@@ -24,7 +24,6 @@ def make_transforms(
     num_views_per_clip=1,
     normalize=((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
 ):
-
     if not training and num_views_per_clip > 1:
         print("Making EvalVideoTransform, multi-view")
         _frames_augmentation = EvalVideoTransform(
@@ -64,7 +63,7 @@ class VideoTransform(object):
     ):
 
         self.training = training
-
+        ## make the shorter side a lil larger, then take a centre crop
         short_side_size = int(crop_size * 256 / 224)
         self.eval_transform = video_transforms.Compose(
             [
@@ -158,6 +157,9 @@ class EvalVideoTransform(object):
     def __call__(self, buffer):
 
         # Sample several spatial views of each clip
+        ### for a given spatial crop, same spatial crop is used for all frames, so its temporally consistent.
+        ### crop size = side_len i.e smaller side. So if (224, 480) frames, then crop is sampled from longer side resulting in a (224,224) crop
+        
         buffer = np.array(self.spatial_resize(buffer))
         T, H, W, C = buffer.shape
 
