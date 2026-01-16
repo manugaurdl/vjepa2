@@ -42,7 +42,7 @@ dino_model: "dinov2_vits14" # "dinov2_vitl14"
 dino_pretrained: true
 freeze_dino: true
 encoder:
-  type: "transformer" #["transformer", "mlp", "linear"]
+  type: "rnn" #["transformer", "mlp", "linear", "rnn"]
   transformer:
     hidden_dim: 1024
     depth: 4
@@ -50,6 +50,10 @@ encoder:
   mlp:
     hidden_dim: 1024
     num_layers: 8
+  rnn:
+    hidden_dim: 384  
+    depth: 4
+  
 pooling: "mean" # ["mean", "concat"]
 num_classes: 174
 

@@ -4,7 +4,7 @@ from typing import Any, Tuple
 
 import torch
 import torch.nn as nn
-
+from root.models.rnn import VideoRNNTransformerEncoder
 
 class Transformer(nn.Module):
     """
@@ -76,5 +76,8 @@ def build_encoder(encoder_cfg: Any, *, input_dim: int) -> Tuple[nn.Module, int]:
         tr_cfg = encoder_cfg.transformer
         encoder = Transformer(input_dim=input_dim, hidden_dim=tr_cfg.hidden_dim, depth=tr_cfg.depth, n_heads=tr_cfg.n_heads)
         out_dim = encoder.out_dim
-        
+    elif enc_type == "rnn":
+        rnn_cfg = encoder_cfg.rnn
+        encoder = VideoRNNTransformerEncoder(dim=rnn_cfg.hidden_dim, num_layers=rnn_cfg.depth, num_heads=8, mlp_dim=4*rnn_cfg.hidden_dim)
+        out_dim = rnn_cfg.hidden_dim
     return encoder, out_dim

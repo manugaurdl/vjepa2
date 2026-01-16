@@ -25,15 +25,6 @@ def _dinov2_frame_features(dino: nn.Module, x: torch.Tensor) -> torch.Tensor:
                 return feats["x_clstoken"]
         if torch.is_tensor(feats):
             return feats
-    out = dino(x)
-    if isinstance(out, dict):
-        if "x_norm_clstoken" in out:
-            return out["x_norm_clstoken"]
-        if "x_clstoken" in out:
-            return out["x_clstoken"]
-    if torch.is_tensor(out):
-        return out
-    raise RuntimeError(f"Unsupported Dinov2 output type: {type(out)}")
 
 class DinoFrameEncoder(nn.Module):
     """
@@ -53,14 +44,18 @@ class DinoFrameEncoder(nn.Module):
         self.dino = dino
         self.freeze_dino = freeze_dino
         self.pooling = pooling
-
+        self.encoder_type = args.encoder.type
+        
         self.encoder, encoder_out_dim = build_encoder(args.encoder, input_dim=dino_dim)
         if encoder_out_dim is None:
             encoder_out_dim = dino_dim
-        if self.pooling == "concat":
-            head_in_dim = encoder_out_dim * args.frames_per_clip
-        elif self.pooling == "mean":
-            head_in_dim = encoder_out_dim
+        if self.encoder_type == "rnn":
+            head_in_dim = args.encoder.rnn.hidden_dim
+        else:
+            if self.pooling == "concat":
+                head_in_dim = encoder_out_dim * args.frames_per_clip
+            elif self.pooling == "mean":
+                head_in_dim = encoder_out_dim
 
         self.head = nn.Linear(head_in_dim, num_classes)
 
@@ -88,13 +83,19 @@ class DinoFrameEncoder(nn.Module):
         else:
             f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
 
-        f = f.reshape(B, T, -1)  # (B, T, D)
-        f = self.encoder(f)  # (B, T, M)
-        if self.pooling == "mean":
-            pooled = f.mean(dim=1)
-        elif self.pooling == "concat":
-            pooled = f.reshape(B, -1)  # (B, T*M)
-        return self.head(pooled)
+        # import ipdb; ipdb.set_trace()
+        frame_feats = f.reshape(B, T, -1)  # (B, T, D)
+        frame_feats = self.encoder(frame_feats)  # (B, T, M)
+
+        if self.encoder_type == "rnn":
+            frame_feats, final_state = frame_feats
+            return self.head(final_state)
+        else:
+            if self.pooling == "mean":
+                pooled = frame_feats.mean(dim=1)
+            elif self.pooling == "concat":
+                pooled = frame_feats.reshape(B, -1)  # (B, T*M)
+            return self.head(pooled)
 
 
 def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
