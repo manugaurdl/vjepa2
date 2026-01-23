@@ -26,8 +26,10 @@ class CrossAttentionBlock(nn.Module):
         self.mlp_ln = nn.LayerNorm(dim, eps=1e-6)
         self.sa_ln = nn.LayerNorm(dim, eps=1e-6)
 
-        self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
-        self.self_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        # self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.W_cross_attn = nn.Linear(dim, dim)
+        self.W_self_attn = nn.Linear(dim, dim)
+        # self.self_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.mlp = FeedForward(dim, mlp_dim)
 
     def forward(self, x, kv):
@@ -35,13 +37,17 @@ class CrossAttentionBlock(nn.Module):
         q = self.ca_ln(x)
         k = kv
         v = kv
-        ca_out, _ = self.cross_attn(q, k, v, need_weights=False)
+        ### since q and kv are (B,1,D), then q@k.transpose(-2, -1) is (B,1,1), hence output of attn is v
+        ### to test this, replace cross_attn with nn.Linear(D,D)(KV)
+        ca_out = self.W_cross_attn(kv)
+        # ca_out, _ = self.cross_attn(q, k, v, need_weights=False)
         x = x + ca_out
 
         x = x + self.mlp(self.mlp_ln(x))
 
         qkv = self.sa_ln(x)
-        sa_out, _ = self.self_attn(qkv, qkv, qkv, need_weights=False)
+        sa_out = self.W_self_attn(qkv)
+        # sa_out, _ = self.self_attn(qkv, qkv, qkv, need_weights=False)
         x = x + sa_out
         return x
 
