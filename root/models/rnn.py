@@ -3,6 +3,74 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class SigmoidAttention(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        qkv_bias: bool = False,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        norm_layer: nn.Module = nn.LayerNorm,
+    ):
+        super().__init__()
+        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        # Separate projections for Q, K, V
+        self.q_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        self.k_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        self.v_proj = nn.Linear(dim, dim, bias=qkv_bias)
+        
+        # Norm layers (applied per head as in your original snippet)
+        self.q_norm = norm_layer(self.head_dim)
+        self.k_norm = norm_layer(self.head_dim)
+
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            q: (Batch, Query_Length, Dim)
+            k: (Batch, Key_Length, Dim)
+            v: (Batch, Key_Length, Dim)
+        """
+        B, Lq, C = q.shape
+        _, Lk, _ = k.shape # Key and Value usually share the same sequence length
+
+        # Output shape: (B, num_heads, Sequence_Length, head_dim)
+        q = self.q_proj(q).reshape(B, Lq, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = self.k_proj(k).reshape(B, Lk, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = self.v_proj(v).reshape(B, Lk, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        # 2. Apply Norms (QK Norm)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        # 3. Sigmoid Attention
+        q = q * self.scale
+
+        attn = q @ k.transpose(-2, -1) # (B, nh, Lq, Lk)
+
+        attn = torch.sigmoid(attn)
+
+        attn = self.attn_drop(attn)
+
+        # 4. Weighted Sum
+        x = attn @ v # (B, nh, Lq, head_dim)
+
+        # 5. Projection
+        x = x.transpose(1, 2).reshape(B, Lq, C) # (B, Lq, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        
+        return x
+
+
 class FeedForward(nn.Module):
     def __init__(self, dim: int, mlp_dim: int):
         super().__init__()
@@ -26,8 +94,9 @@ class CrossAttentionBlock(nn.Module):
         self.mlp_ln = nn.LayerNorm(dim, eps=1e-6)
         self.sa_ln = nn.LayerNorm(dim, eps=1e-6)
 
+        self.sigmoid_ca = SigmoidAttention(dim, num_heads)
         # self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
-        self.W_cross_attn = nn.Linear(dim, dim)
+        # self.W_cross_attn = nn.Linear(dim, dim)
         self.W_self_attn = nn.Linear(dim, dim)
         # self.self_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.mlp = FeedForward(dim, mlp_dim)
@@ -37,16 +106,15 @@ class CrossAttentionBlock(nn.Module):
         q = self.ca_ln(x)
         k = kv
         v = kv
-        ### since q and kv are (B,1,D), then q@k.transpose(-2, -1) is (B,1,1), hence output of attn is v
-        ### to test this, replace cross_attn with nn.Linear(D,D)(KV)
-        ca_out = self.W_cross_attn(kv)
+        ca_out = self.sigmoid_ca(q, k, v) # sigmoid for cross-attention
+        # ca_out = self.W_cross_attn(kv) #replace CA with linear layer
         # ca_out, _ = self.cross_attn(q, k, v, need_weights=False)
         x = x + ca_out
 
         x = x + self.mlp(self.mlp_ln(x))
 
         qkv = self.sa_ln(x)
-        sa_out = self.W_self_attn(qkv)
+        sa_out = self.W_self_attn(qkv) # replace SA with linear layer
         # sa_out, _ = self.self_attn(qkv, qkv, qkv, need_weights=False)
         x = x + sa_out
         return x
