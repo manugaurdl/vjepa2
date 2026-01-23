@@ -144,9 +144,11 @@ class GatedTransformerCore(nn.Module):
         self.state_update = nn.Linear(dim, dim, bias=False)
         self.state_reset = nn.Linear(dim, dim, bias=False)
 
-        self.transformer = CrossAttentionTransformer(
-            num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
-        )
+        # self.transformer = CrossAttentionTransformer(
+        #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
+        # )
+        self.W_input = nn.Linear(dim, dim, bias=False)
+        self.W_state = nn.Linear(dim, dim, bias=False)
 
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
@@ -154,7 +156,8 @@ class GatedTransformerCore(nn.Module):
         reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
 
         kv = reset_gate * self.state_ln(state)
-        h = self.transformer(inputs, kv)
+        h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
+        # h = self.transformer(inputs, kv)
 
         out = (1.0 - update_gate) * state + update_gate * h
         state = out
