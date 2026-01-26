@@ -69,16 +69,21 @@ def run_validation(
     correct = torch.tensor(0.0, device=device)
     total = torch.tensor(0.0, device=device)
     loss_sum = torch.tensor(0.0, device=device)
+
     for batch in tqdm(utils._iter_batches(loader), total=len(loader), desc=f"Validating epoch {epoch}"):
         clips = batch.clips
+        ds_index = batch.ds_index
         x = clips[0] if isinstance(clips, (list, tuple)) else clips
         x = x.to(device, non_blocking=True)
         y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
-        logits = model(x)
+        logits = model(x, ds_index)
         loss_sum += F.cross_entropy(logits, y, reduction="sum")
         pred = logits.argmax(dim=1)
         correct += (pred == y).float().sum()
         total += float(y.numel())
+    if model.cache_dino_feats:
+        # torch.save(model.id_to_feat,"/data3/mgaur/ssv2/dino_feats/vits/validation.pt")                                              
+        pass
 
     if _is_distributed(world_size):
         dist.all_reduce(correct, op=dist.ReduceOp.SUM)
@@ -117,6 +122,7 @@ def main(args) -> None:
 
 
     train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master)
+
     # --- model / opt
     model = _build_model(args, device)
     model = _wrap_ddp(model, device, world_size)
@@ -148,10 +154,13 @@ def main(args) -> None:
             t0 = time.time()
 
             clips = batch.clips
+            ds_index = batch.ds_index
             x = clips[0] if isinstance(clips, (list, tuple)) else clips
             x = x.to(device, non_blocking=True)
             y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
-            logits = model(x)
+            logits = model(x, ds_index)
+            if model.cache_dino_feats:
+                continue
             loss = F.cross_entropy(logits, y) / max(args.grad_accum, 1)
             loss.backward()
 
@@ -186,6 +195,9 @@ def main(args) -> None:
                 
             global_vars["global_step"] += 1
 
+        if  model.cache_dino_feats:
+            # torch.save(model.id_to_feat,"/data3/mgaur/ssv2/dino_feats/vitl/train.pt")                                              
+            pass
         if _is_distributed(world_size):
             dist.barrier()
 

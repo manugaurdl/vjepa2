@@ -64,7 +64,7 @@ class TrainBatch:
     # - a single tensor [B, C, T, H, W]
     clips: object
     labels: torch.Tensor
-
+    ds_index: int
 
 def _get_device() -> torch.device:
     if not torch.cuda.is_available():
@@ -76,11 +76,11 @@ def _get_device() -> torch.device:
 
 def _iter_batches(loader: Iterable) -> Iterable[TrainBatch]:
     # VideoDataset yields: (buffer, label, clip_indices)
-    for clips, labels, _clip_idxs in loader:
+    for clips, labels, _clip_idxs, index in loader:
         # labels may come in as list[str] or list[int] -> normalize here.
         if not torch.is_tensor(labels):
             labels = torch.as_tensor(labels)
-        yield TrainBatch(clips=clips, labels=labels)
+        yield TrainBatch(clips=clips, labels=labels, ds_index=index)
 
 def save_checkpoint(optimizer, args, epoch, global_step, state_dict, logger):
     ckpt_path = os.path.join(args.output_dir, f"best.pt")

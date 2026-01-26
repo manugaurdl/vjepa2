@@ -5,6 +5,7 @@ output_dir: "./outputs/debug" # make it .outputs/wandb_name
 checkpoint: null
 eval_only: false
 init_eval: true
+cache_dino_feats: false
 
 # --- Dataset / Sampling ---
 batch_size: 128
@@ -32,7 +33,7 @@ crop_size: 224
 
 # --- Model ---
 dino_repo: "facebookresearch/dinov2"
-dino_model: "dinov2_vits14" # "dinov2_vitl14"
+dino_model: "dinov2_vitl14" # "dinov2_vitl14"
 dino_pretrained: true
 freeze_dino: true
 encoder:

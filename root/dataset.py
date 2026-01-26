@@ -23,6 +23,7 @@ def get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, wo
         log_dir=(os.path.join(args.output_dir, "dataloader_logs") if is_master else None),
         debug=args.debug,
         uniform_sampling=args.uniform_sampling,
+        shuffle=True,
         **sampling_kwargs,
     )
 
@@ -46,6 +47,7 @@ def get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, wo
         log_dir=None,
         debug=args.debug,
         uniform_sampling=args.uniform_sampling,
+        shuffle=False,
         **sampling_kwargs,
     )
 

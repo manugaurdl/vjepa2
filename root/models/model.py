@@ -45,7 +45,8 @@ class DinoFrameEncoder(nn.Module):
         self.freeze_dino = freeze_dino
         self.pooling = pooling
         self.encoder_type = args.encoder.type
-        
+        self.cache_dino_feats = args.cache_dino_feats
+
         self.encoder, encoder_out_dim = build_encoder(args.encoder, input_dim=dino_dim)
         if encoder_out_dim is None:
             encoder_out_dim = dino_dim
@@ -63,6 +64,10 @@ class DinoFrameEncoder(nn.Module):
             for p in self.dino.parameters():
                 p.requires_grad_(False)
             self.dino.eval()
+        
+        if self.cache_dino_feats:
+            self.id_to_feat = torch.zeros(168913, 8, 1024) # train:168913, val: 24777
+
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -71,7 +76,7 @@ class DinoFrameEncoder(nn.Module):
             self.dino.eval()
         return self
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, ds_index: int) -> torch.Tensor:
         if x.ndim != 5:
             raise ValueError(f"Expected video tensor [B,C,T,H,W], got shape={tuple(x.shape)}")
         B, C, T, H, W = x.shape
@@ -83,8 +88,12 @@ class DinoFrameEncoder(nn.Module):
         else:
             f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
 
-        # import ipdb; ipdb.set_trace()
         frame_feats = f.reshape(B, T, -1)  # (B, T, D)
+        
+        if self.cache_dino_feats:
+            self.id_to_feat[ds_index] = frame_feats.cpu()
+            return frame_feats
+        
         frame_feats = self.encoder(frame_feats)  # (B, T, M)
 
         if self.encoder_type == "rnn":
