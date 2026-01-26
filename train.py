@@ -26,6 +26,8 @@ Expected csv format (space-delimited, no header):
 from __future__ import annotations
 
 import os
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 import time
 from tqdm import tqdm
 

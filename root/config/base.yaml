@@ -1,11 +1,5 @@
 # config.yaml
-
-# --- I/O ---
-# data_path is a list (action="append")
-data_path:
-  - "/nas/manu/ssv2/data/train.csv"
-val_data_path:
-  - "/nas/manu/ssv2/data/validation.csv"
+data_dir: "/nas/manu"
 
 output_dir: "./outputs/debug" # make it .outputs/wandb_name
 checkpoint: null

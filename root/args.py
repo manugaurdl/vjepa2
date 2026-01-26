@@ -70,7 +70,10 @@ def prepare_config():
         args_dict["wandb.logging"] = False
         args_dict["num_workers"] = 0
         args_dict["wandb.logging"] = False
-    
+    ### set data_dir
+    args_dict['data_path'] = os.path.join(args_dict['data_dir'], 'ssv2/data/train.csv')
+    args_dict['val_data_path'] = os.path.join(args_dict['data_dir'], 'ssv2/data/validation.csv')
+
     nested_dict = {}
     for key, value in args_dict.items():
         parts = key.split('.')

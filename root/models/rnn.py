@@ -88,9 +88,9 @@ class CrossAttentionBlock(nn.Module):
         self.mlp_ln = nn.LayerNorm(dim, eps=1e-6)
         self.sa_ln = nn.LayerNorm(dim, eps=1e-6)
 
-        self.sigmoid_ca = SigmoidAttention(dim=cross_attn_dim, dim_q=dim, dim_kv=dim, num_heads=num_heads)
+        # self.sigmoid_ca = SigmoidAttention(dim=cross_attn_dim, dim_q=dim, dim_kv=dim, num_heads=num_heads)
         # self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
-        # self.W_cross_attn = nn.Linear(dim, dim)
+        self.W_cross_attn = nn.Linear(dim, dim)
         self.W_self_attn = nn.Linear(dim, dim)
         # self.self_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.mlp = FeedForward(dim, mlp_dim)
@@ -100,8 +100,8 @@ class CrossAttentionBlock(nn.Module):
         q = self.ca_ln(x)
         k = kv
         v = kv
-        ca_out = self.sigmoid_ca(q, k, v) # sigmoid for cross-attention
-        # ca_out = self.W_cross_attn(kv) #replace CA with linear layer
+        # ca_out = self.sigmoid_ca(q, k, v) # sigmoid for cross-attention
+        ca_out = self.W_cross_attn(kv) #replace CA with linear layer
         # ca_out, _ = self.cross_attn(q, k, v, need_weights=False)
         x = x + ca_out
 
@@ -147,8 +147,11 @@ class GatedTransformerCore(nn.Module):
         # self.transformer = CrossAttentionTransformer(
         #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
         # )
-        self.W_input = nn.Linear(dim, dim, bias=False)
-        self.W_state = nn.Linear(dim, dim, bias=False)
+        # self.W_input = nn.Linear(dim, dim, bias=False)
+        # self.W_state = nn.Linear(dim, dim, bias=False)
+        self.transformer = CrossAttentionTransformer(
+            num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
+        )
 
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
@@ -156,8 +159,8 @@ class GatedTransformerCore(nn.Module):
         reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
 
         kv = reset_gate * self.state_ln(state)
-        h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
-        # h = self.transformer(inputs, kv)
+        # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
+        h = self.transformer(inputs, kv)
 
         out = (1.0 - update_gate) * state + update_gate * h
         state = out

@@ -158,6 +158,7 @@ class VideoDataset(torch.utils.data.Dataset):
 
         if isinstance(data_paths, str):
             self.data_paths = [data_paths]
+            self.data_dir = data_paths.split('ssv2')[0]
 
         if dataset_fpcs is None:
             self.dataset_fpcs = [frames_per_clip for _ in self.data_paths]
@@ -192,7 +193,7 @@ class VideoDataset(torch.utils.data.Dataset):
                 labels += [0] * len(data)
                 num_samples = len(data)
                 self.num_samples_per_dataset.append(len(data))
-
+        samples = [os.path.join(self.data_dir, _[_.index("ssv2"):]) for _ in samples]
         self.per_dataset_indices = ConcatIndices(self.num_samples_per_dataset)
 
         # [Optional] Weights for each sample to be used by downstream
