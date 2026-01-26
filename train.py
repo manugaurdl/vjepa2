@@ -112,6 +112,7 @@ def main(args) -> None:
 
     is_master = rank == 0
     if is_master:
+        args.output_dir = os.path.join(args.output_dir, args.wandb.run_name + "_" + wandb.run.id)
         os.makedirs(args.output_dir, exist_ok=True)
     logger.info(f"Initialized device={device}, rank/world={rank}/{world_size}")
 
