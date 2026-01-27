@@ -122,7 +122,11 @@ def main(args) -> None:
     logger.info(f"Initialized device={device}, rank/world={rank}/{world_size}")
 
     # --- data
-    train_transform = make_transforms(mode="train", crop_size=args.crop_size)
+    if args.cache_dino_feats:
+        mode = "eval" #when load_cache_feats=true, transforms not called, automatically eval mode
+    else:
+        mode = "train"
+    train_transform = make_transforms(mode=mode, crop_size=args.crop_size)
     eval_transform = make_transforms(mode="eval", crop_size=args.crop_size)
     sampling_kwargs = parser._resolve_sampling_kwargs(args)
 
