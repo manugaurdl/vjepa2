@@ -156,9 +156,10 @@ class GatedTransformerCore(nn.Module):
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
         update_gate = torch.sigmoid(self.input_update(inputs) + self.state_update(state))
-        reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
+        # reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
 
-        kv = reset_gate * self.state_ln(state)
+        # kv = reset_gate * self.state_ln(state)
+        kv = self.state_ln(state)
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
         h = self.transformer(inputs, kv)
 
