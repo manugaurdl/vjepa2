@@ -9,6 +9,8 @@ import torch
 import random
 import numpy as np
 import wandb
+import json
+import argparse
 
 def set_seed(seed_value):
     """
@@ -84,6 +86,8 @@ def _iter_batches(loader: Iterable) -> Iterable[TrainBatch]:
 
 def save_checkpoint(optimizer, args, epoch, global_step, state_dict, logger):
     ckpt_path = os.path.join(args.output_dir, f"best.pt")
+    with open(os.path.join(args.output_dir, "config.json"), "w") as f:
+        json.dump(namespace_to_dict(args), f, indent=4)
     to_save = {
         "epoch": epoch,
         "model": state_dict,
@@ -93,3 +97,22 @@ def save_checkpoint(optimizer, args, epoch, global_step, state_dict, logger):
     torch.save(to_save, ckpt_path)
     logger.info(f"Saved checkpoint: {ckpt_path}")
 
+def namespace_to_dict(obj):
+    if isinstance(obj, argparse.Namespace):
+        return {k: namespace_to_dict(v) for k, v in vars(obj).items()}
+    elif isinstance(obj, dict):
+        return {k: namespace_to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [namespace_to_dict(v) for v in obj]
+    else:
+        return obj
+
+def dict_to_namespace(data):
+    if isinstance(data, dict):
+        # Convert all values in the dict recursively, then wrap in Namespace
+        return argparse.Namespace(**{k: dict_to_namespace(v) for k, v in data.items()})
+    elif isinstance(data, list):
+        # Handle lists by checking if they contain more dicts
+        return [dict_to_namespace(v) for v in data]
+    else:
+        return data

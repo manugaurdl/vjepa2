@@ -46,7 +46,6 @@ from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
 from src.utils.logging import AverageMeter, get_logger
 import wandb
-
 logger = get_logger(__name__, force=True)
 
 global_vars = {
@@ -85,7 +84,7 @@ def run_validation(
         total += float(y.numel())
     
     if model.cache_dino_feats:
-        save_path = "/data3/mgaur/ssv2/dino_feats/vitl14/validation.pt"
+        save_path = "/data3/mgaur/ssv2/dino_feats/vits14/validation.pt"
         print(f"Saving dino feats to {save_path}")
         torch.save(model.id_to_feat, save_path)                                              
         exit()
@@ -97,7 +96,7 @@ def run_validation(
 
     acc = (correct / total.clamp_min(1.0)).item()
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
-    if is_master and args.wandb.logging:
+    if is_master and wandb.run:
         wandb.log({
             "eval/loss": mean_loss,
             "eval/acc": acc,
@@ -206,8 +205,8 @@ def main(args) -> None:
             global_vars["global_step"] += 1
 
         if  model.cache_dino_feats:
-            # torch.save(model.id_to_feat,"/data3/mgaur/ssv2/dino_feats/vitl/train.pt")                                              
-            pass
+            torch.save(model.id_to_feat,"/data3/mgaur/ssv2/dino_feats/vits14/train.pt")                                              
+            exit()
         if _is_distributed(world_size):
             dist.barrier()
 

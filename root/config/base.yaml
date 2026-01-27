@@ -1,12 +1,12 @@
 # config.yaml
 data_dir: "/nas/manu"
 
-output_dir: "./outputs"
+output_dir: "/data3/mgaur/vjepa2/outputs"
 checkpoint: null
 eval_only: false
 init_eval: true
 cache_dino_feats: false #save train.pt and validation.pt
-load_cache_feats: true 
+load_cache_feats: false 
 
 # --- Dataset / Sampling ---
 batch_size: 128
