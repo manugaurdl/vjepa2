@@ -23,7 +23,8 @@ logger = getLogger()
 
 
 def make_videodataset(
-    data_paths,
+    data_paths, 
+    args,
     batch_size,
     frames_per_clip=8,
     dataset_fpcs=None,
@@ -50,9 +51,11 @@ def make_videodataset(
     debug=False,
     uniform_sampling=False,
     shuffle=True,
+    load_cache_feats=False,
 ):
     dataset = VideoDataset(
         data_paths=data_paths,
+        args=args,
         datasets_weights=datasets_weights,
         frames_per_clip=frames_per_clip,
         dataset_fpcs=dataset_fpcs,
@@ -68,6 +71,7 @@ def make_videodataset(
         transform=transform,
         debug=debug,
         uniform_sampling=uniform_sampling,
+        load_cache_feats=load_cache_feats,
     )
 
     log_dir = pathlib.Path(log_dir) if log_dir else None
@@ -123,6 +127,7 @@ class VideoDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data_paths,
+        args,
         datasets_weights=None,
         frames_per_clip=16,
         fps=None,
@@ -138,6 +143,7 @@ class VideoDataset(torch.utils.data.Dataset):
         duration=None,  # duration in seconds
         debug = False,
         uniform_sampling = False,
+        load_cache_feats = False,
     ):
         self.data_paths = data_paths
         self.datasets_weights = datasets_weights
@@ -153,7 +159,9 @@ class VideoDataset(torch.utils.data.Dataset):
         self.fps = fps
         self.debug = debug
         self.uniform_sampling = uniform_sampling
-
+        self.load_cache_feats = load_cache_feats
+        if self.load_cache_feats:
+            self.index_to_feat = torch.load(os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1], f"{data_paths.split('/')[-1].split('.')[-0]}.pt"))
         if sum([v is not None for v in (fps, duration, frame_step)]) != 1:
             raise ValueError(f"Must specify exactly one of either {fps=}, {duration=}, or {frame_step=}.")
 
@@ -228,6 +236,14 @@ class VideoDataset(torch.utils.data.Dataset):
         return loaded_sample
 
     def get_item_video(self, index):
+        
+        # Label/annotations for video
+        label = self.labels[index]
+        
+        if self.load_cache_feats:
+            frame_feat = self.index_to_feat[index]
+            return frame_feat, label, -1, index
+
         sample = self.samples[index]
         dataset_idx, _ = self.per_dataset_indices[index]
         frames_per_clip = self.dataset_fpcs[dataset_idx]
@@ -236,9 +252,6 @@ class VideoDataset(torch.utils.data.Dataset):
         loaded_video = len(buffer) > 0
         if not loaded_video:
             return
-
-        # Label/annotations for video
-        label = self.labels[index]
 
         def split_into_clips(video):
             """Split video into a list of clips"""

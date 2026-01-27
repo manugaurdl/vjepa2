@@ -85,7 +85,7 @@ def run_validation(
         total += float(y.numel())
     
     if model.cache_dino_feats:
-        save_path = "/data3/mgaur/ssv2/dino_feats/vitl/validation.pt"
+        save_path = "/data3/mgaur/ssv2/dino_feats/vitl14/validation.pt"
         print(f"Saving dino feats to {save_path}")
         torch.save(model.id_to_feat, save_path)                                              
         exit()

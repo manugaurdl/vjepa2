@@ -46,7 +46,7 @@ class DinoFrameEncoder(nn.Module):
         self.pooling = pooling
         self.encoder_type = args.encoder.type
         self.cache_dino_feats = args.cache_dino_feats
-
+        
         self.encoder, encoder_out_dim = build_encoder(args.encoder, input_dim=dino_dim)
         if encoder_out_dim is None:
             encoder_out_dim = dino_dim
@@ -60,7 +60,7 @@ class DinoFrameEncoder(nn.Module):
 
         self.head = nn.Linear(head_in_dim, num_classes)
 
-        if self.freeze_dino:
+        if self.freeze_dino and (self.dino is not None):
             for p in self.dino.parameters():
                 p.requires_grad_(False)
             self.dino.eval()
@@ -72,28 +72,31 @@ class DinoFrameEncoder(nn.Module):
     def train(self, mode: bool = True):
         super().train(mode)
         # Keep Dinov2 frozen in eval mode even when the rest of the model trains.
-        if self.freeze_dino:
+        if self.freeze_dino and (self.dino is not None):
             self.dino.eval()
         return self
 
     def forward(self, x: torch.Tensor, ds_index: int) -> torch.Tensor:
-        if x.ndim != 5:
-            raise ValueError(f"Expected video tensor [B,C,T,H,W], got shape={tuple(x.shape)}")
-        B, C, T, H, W = x.shape
-        frames = x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)  # (B*T, C, H, W)
 
-        if self.freeze_dino:
-            with torch.no_grad():
-                f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
+        if self.dino is None:
+            frame_feats = x
         else:
-            f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
+            if x.ndim != 5:
+                raise ValueError(f"Expected video tensor [B,C,T,H,W], got shape={tuple(x.shape)}")
+            B, C, T, H, W = x.shape
+            frames = x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)  # (B*T, C, H, W)
+            if self.freeze_dino:
+                with torch.no_grad():
+                    f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
+            else:
+                f = _dinov2_frame_features(self.dino, frames)  # (B*T, D)
 
-        frame_feats = f.reshape(B, T, -1)  # (B, T, D)
-        
-        if self.cache_dino_feats:
-            self.id_to_feat[ds_index] = frame_feats.cpu()
-            return frame_feats
-        
+            frame_feats = f.reshape(B, T, -1)  # (B, T, D)
+            
+            if self.cache_dino_feats:
+                self.id_to_feat[ds_index] = frame_feats.cpu()
+                return frame_feats
+
         frame_feats = self.encoder(frame_feats)  # (B, T, M)
 
         if self.encoder_type == "rnn":
@@ -111,25 +114,20 @@ def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
     if args.pooling == "concat" and (args.eval_frames_per_clip != args.frames_per_clip):
         raise ValueError("pooling='concat' requires frames_per_clip == eval_frames_per_clip (fixed T).")
     # Load Dinov2 as an image encoder and apply it per-frame.
-    try:
-        dino = torch.hub.load(args.dino_repo, args.dino_model, pretrained=args.dino_pretrained)
-    except Exception as e:
-        raise RuntimeError(
-            "Failed to load Dinov2 via torch.hub. "
-            "If you're offline, make sure the Dinov2 hub weights are already cached or set --dino-pretrained false.\n"
-            f"repo={args.dino_repo!r} model={args.dino_model!r} pretrained={args.dino_pretrained}\n"
-            f"original_error={e}"
-        )
+    
+    dino_dim = 384 if args.dino_model == "dinov2_vits14" else 1024
+    if args.load_cache_feats:
+        dino = None
+    else:
+        try:
+            dino = torch.hub.load(args.dino_repo, args.dino_model, pretrained=args.dino_pretrained)
+        except Exception as e:
+            raise RuntimeError("Failed to load Dinov2 via torch.hub.")
 
-    # Infer feature dimension with a tiny forward on CPU (cheap, avoids model-specific attribute assumptions).
-    dino.eval()
-    with torch.no_grad():
-        dummy = torch.zeros(1, 3, args.crop_size, args.crop_size)
-        d = int(_dinov2_frame_features(dino, dummy).shape[-1])
 
     model = DinoFrameEncoder(
         dino=dino,
-        dino_dim=d,
+        dino_dim=dino_dim,
         args=args,
         num_classes=args.num_classes,
         pooling=args.pooling,

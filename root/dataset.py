@@ -5,6 +5,7 @@ import os
 def get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master):
     train_ds, train_loader, train_sampler = make_videodataset(
         data_paths=args.data_path,
+        args=args,
         batch_size=args.batch_size,
         frames_per_clip=args.frames_per_clip,
         num_clips=args.num_clips,
@@ -24,11 +25,13 @@ def get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, wo
         debug=args.debug,
         uniform_sampling=args.uniform_sampling,
         shuffle=True,
+        load_cache_feats=args.load_cache_feats,
         **sampling_kwargs,
     )
 
     val_ds, val_loader, val_sampler = make_videodataset(
         data_paths=args.val_data_path,
+        args=args,
         batch_size=(args.val_batch_size or args.batch_size),
         frames_per_clip=args.eval_frames_per_clip,
         num_clips=args.eval_num_clips,
@@ -48,6 +51,7 @@ def get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, wo
         debug=args.debug,
         uniform_sampling=args.uniform_sampling,
         shuffle=False,
+        load_cache_feats=args.load_cache_feats,
         **sampling_kwargs,
     )
 

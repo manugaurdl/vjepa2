@@ -5,7 +5,8 @@ output_dir: "./outputs"
 checkpoint: null
 eval_only: false
 init_eval: true
-cache_dino_feats: false
+cache_dino_feats: false #save train.pt and validation.pt
+load_cache_feats: true 
 
 # --- Dataset / Sampling ---
 batch_size: 128
@@ -18,7 +19,7 @@ deterministic_loader: true
 
 eval_frames_per_clip: 8
 eval_num_clips: 1
-frames_per_clip: 4
+frames_per_clip: 8
 num_clips: 1
 random_clip_sampling: true
 allow_clip_overlap: false
