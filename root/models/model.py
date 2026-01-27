@@ -66,7 +66,7 @@ class DinoFrameEncoder(nn.Module):
             self.dino.eval()
         
         if self.cache_dino_feats:
-            self.id_to_feat = torch.zeros(168913, 8, 1024) # train:168913, val: 24777
+            self.id_to_feat = torch.zeros(168913, 8, 384) # train:168913, val: 24777
 
 
     def train(self, mode: bool = True):

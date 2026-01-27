@@ -77,13 +77,18 @@ def run_validation(
         x = x.to(device, non_blocking=True)
         y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
         logits = model(x, ds_index)
+        if model.cache_dino_feats:
+            continue
         loss_sum += F.cross_entropy(logits, y, reduction="sum")
         pred = logits.argmax(dim=1)
         correct += (pred == y).float().sum()
         total += float(y.numel())
+    
     if model.cache_dino_feats:
-        # torch.save(model.id_to_feat,"/data3/mgaur/ssv2/dino_feats/vits/validation.pt")                                              
-        pass
+        save_path = "/data3/mgaur/ssv2/dino_feats/vitl/validation.pt"
+        print(f"Saving dino feats to {save_path}")
+        torch.save(model.id_to_feat, save_path)                                              
+        exit()
 
     if _is_distributed(world_size):
         dist.all_reduce(correct, op=dist.ReduceOp.SUM)
@@ -111,7 +116,7 @@ def main(args) -> None:
         torch.backends.cudnn.benchmark = True
 
     is_master = rank == 0
-    if is_master:
+    if is_master and wandb.run:
         args.output_dir = os.path.join(args.output_dir, args.wandb.run_name + "_" + wandb.run.id)
         os.makedirs(args.output_dir, exist_ok=True)
     logger.info(f"Initialized device={device}, rank/world={rank}/{world_size}")
