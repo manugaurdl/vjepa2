@@ -46,6 +46,8 @@ from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
 from src.utils.logging import AverageMeter, get_logger
 import wandb
+import plotly.express as px
+
 logger = get_logger(__name__, force=True)
 
 global_vars = {
@@ -102,17 +104,35 @@ def run_validation(
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
     gate_means = model.val_update_gates.mean(0).tolist()
 
+    # if is_master and wandb.run:
+    #         data = [[t, g] for t, g in enumerate(gate_means)]
+    #         table = wandb.Table(data=data, columns=["timestep", "gate_value"])
+            
+    #         wandb.log({
+    #             "eval/loss": mean_loss,
+    #             "eval/acc": acc,
+    #             "eval/update_gate_plot": wandb.plot.line(
+    #                 table, 
+    #                 "timestep", 
+    #                 "gate_value", 
+    #                 title="Update Gate Avg over Time"
+    #             )
+    #         }, step=int(global_vars["global_step"]))
+    
     if is_master and wandb.run:
-        # long-form table: one row per timestep
-        gate_tbl = wandb.Table(
-            columns=["iter", "T", "gate"],
-            data=[[int(step), int(t), float(g)] for t, g in enumerate(gate_means)],
-        )
+        # Create a simple DataFrame-like list
+        data = [{"timestep": t, "gate": g} for t, g in enumerate(gate_means)]
+        
+        # Create a standard Plotly figure
+        fig = px.line(data, x="timestep", y="gate", title="Update Gate Avg over Time")
+        
+        # Log the figure directly
         wandb.log({
             "eval/loss": mean_loss,
             "eval/acc": acc,
-            "eval/update_gate_avg_over_T": gate_tbl,
-        }, step=global_vars["global_step"])
+            "eval/update_gate_plotly_curve": fig  # <--- Logs as media, enabling the slider!
+        }, step=int(global_vars["global_step"]))
+    
     if hasattr(model, "collect_update_gates"):
         model.collect_update_gates = False
     model.train()

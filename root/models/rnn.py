@@ -167,8 +167,8 @@ class GatedTransformerCore(nn.Module):
         
         h = self.transformer(inputs, kv)
         ## update
-        # out = (1.0 - update_gate) * state + update_gate * h
-        out = state + update_gate * h
+        out = (1.0 - update_gate) * state + update_gate * h
+        # out = state + update_gate * h
 
         state = out
         return out, state, update_gate.mean(-1).detach()
