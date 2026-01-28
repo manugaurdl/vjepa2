@@ -156,19 +156,16 @@ class GatedTransformerCore(nn.Module):
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
         update_gate = torch.sigmoid(self.input_update(inputs) + self.state_update(state))
-        
-        ### reset gate
         # reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
-        # kv = reset_gate * self.state_ln(state)
-        ### no reset gate
-        kv = self.state_ln(state)
 
+        # kv = reset_gate * self.state_ln(state)
+        kv = self.state_ln(state)
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
         h = self.transformer(inputs, kv)
-
         out = (1.0 - update_gate) * state + update_gate * h
+
         state = out
-        return out, state
+        return out, state, update_gate.mean(-1).detach()
 
 
 class VideoRNNTransformerEncoder(nn.Module):
@@ -203,8 +200,10 @@ class VideoRNNTransformerEncoder(nn.Module):
             state = torch.zeros((B, S, D), device=x.device, dtype=x.dtype)
  
         outs = []
+        timesteps_update_gate = []
         for t in range(T):
-            out_t, state = self.core(x[:, t], state)  # (B,S,D)
+            out_t, state, update_gate = self.core(x[:, t], state)  # (B,S,D)
+            timesteps_update_gate.append(update_gate)
             outs.append(out_t)
 
         outs = torch.stack(outs, dim=1)  # (B,T,S,D)
@@ -214,9 +213,11 @@ class VideoRNNTransformerEncoder(nn.Module):
             state = state.squeeze(1) # (B,D)
 
         if return_all:
-            return outs, state
+            update_gates = torch.stack(timesteps_update_gate, dim=1)  # (B,T,S)
+            update_gates = update_gates.mean(-1)  # (B,T), average if S!=1
+            return outs, state, update_gates
         else:
-            return outs[:, -1], state
+            return outs[:, -1], state,
 
 
 # ---- minimal usage ----

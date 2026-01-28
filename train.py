@@ -65,6 +65,8 @@ def run_validation(
     is_master: bool,
 ) -> tuple[float, float]:
     model.eval()
+    if hasattr(model, "collect_update_gates"):
+        model.collect_update_gates = True
     correct = torch.tensor(0.0, device=device)
     total = torch.tensor(0.0, device=device)
     loss_sum = torch.tensor(0.0, device=device)
@@ -101,6 +103,8 @@ def run_validation(
             "eval/loss": mean_loss,
             "eval/acc": acc,
         }, step=global_vars["global_step"])
+    if hasattr(model, "collect_update_gates"):
+        model.collect_update_gates = False
     model.train()
     return mean_loss, acc
 
@@ -131,6 +135,7 @@ def main(args) -> None:
 
 
     train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master)
+    args.val_dataset_len = len(val_ds)
 
     # --- model / opt
     model = _build_model(args, device)

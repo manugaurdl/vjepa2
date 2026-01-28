@@ -67,6 +67,9 @@ class DinoFrameEncoder(nn.Module):
         
         if self.cache_dino_feats:
             self.id_to_feat = torch.zeros(168913, 8, 384) # train:168913, val: 24777
+        if getattr(args, "val_dataset_len", None) is not None:
+            self.val_update_gates = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
+            self.collect_update_gates = False
 
 
     def train(self, mode: bool = True):
@@ -100,7 +103,9 @@ class DinoFrameEncoder(nn.Module):
         frame_feats = self.encoder(frame_feats)  # (B, T, M)
 
         if self.encoder_type == "rnn":
-            frame_feats, final_state = frame_feats
+            frame_feats, final_state, timesteps_update_gate = frame_feats
+            if (not self.training) and getattr(self, "collect_update_gates", False):
+                self.val_update_gates[ds_index] = timesteps_update_gate.detach().cpu()
             return self.head(final_state)
         else:
             if self.pooling == "mean":
