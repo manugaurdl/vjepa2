@@ -98,10 +98,18 @@ def run_validation(
 
     acc = (correct / total.clamp_min(1.0)).item()
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
+    gate_means = model.val_update_gates.mean(0).tolist()
+
     if is_master and wandb.run:
+        # long-form table: one row per timestep
+        gate_tbl = wandb.Table(
+            columns=["iter", "T", "gate"],
+            data=[[int(step), int(t), float(g)] for t, g in enumerate(gate_means)],
+        )
         wandb.log({
             "eval/loss": mean_loss,
             "eval/acc": acc,
+            "eval/update_gate_avg_over_T": gate_tbl,
         }, step=global_vars["global_step"])
     if hasattr(model, "collect_update_gates"):
         model.collect_update_gates = False
