@@ -86,7 +86,9 @@ def run_validation(
         total += float(y.numel())
     
     if model.cache_dino_feats:
-        save_path = "/data3/mgaur/ssv2/dino_feats/vits14/validation.pt"
+        save_dir = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1])
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, "validation.pt")
         print(f"Saving dino feats to {save_path}")
         torch.save(model.id_to_feat, save_path)                                              
         exit()
@@ -218,7 +220,11 @@ def main(args) -> None:
             global_vars["global_step"] += 1
 
         if  model.cache_dino_feats:
-            torch.save(model.id_to_feat,"/data3/mgaur/ssv2/dino_feats/vits14/train.pt")                                              
+            save_dir = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1])
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, "train.pt")
+            print(f"Saving dino feats to {save_path}")
+            torch.save(model.id_to_feat, save_path)                                              
             exit()
         if _is_distributed(world_size):
             dist.barrier()
