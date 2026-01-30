@@ -1,3 +1,5 @@
+inference.html
+inference.ipynb
 .venv
 wandb/
 outputs/
