@@ -120,19 +120,19 @@ def run_validation(
     gate_means = model.update_gates.mean(0).tolist()
     update_norms = model.update_norms.mean(0).tolist()
     hidden_states = model.hidden_states
-    r_novelty = model.r_novelty.mean(0).tolist()
-    memory_l2_shift = compute_relative_state_shift(hidden_states).mean(0).tolist()
+    r_novelty = model.r_novelty.mean(0).tolist()[1:] #skip first timestep
+    memory_l2_shift = compute_relative_state_shift(hidden_states).mean(0).tolist() #skip first two shifts (first not computatble, second not meaningful)
 
     if is_master and wandb.run:
-        def create_plotly_figure(data, title, y_label):
-            data = [{"timestep": t, y_label: g} for t, g in enumerate(data)] # dataframe like list
-            fig = px.line(data, x="timestep", y=y_label, title=title) #plotly line plot
+        def create_plotly_figure(data, title, y_label, x_label):
+            data = [{x_label: t, y_label: g} for t, g in enumerate(data)] # dataframe like list
+            fig = px.line(data, x=x_label, y=y_label, title=title) #plotly line plot
             return fig
         
-        fig_update_gate = create_plotly_figure(gate_means, "Update Gate over Time", "gate")
-        fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm")
-        fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift")
-        fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)")
+        fig_update_gate = create_plotly_figure(gate_means, "Update Gate over Time", "gate", "timestep")
+        fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm", "timestep")
+        fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift", "timestep+2")
+        fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1")
 
         wandb.log({
             "eval/loss": mean_loss,
