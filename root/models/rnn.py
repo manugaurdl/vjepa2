@@ -91,7 +91,7 @@ class CrossAttentionBlock(nn.Module):
 
         # self.sigmoid_ca = SigmoidAttention(dim=cross_attn_dim, dim_q=dim, dim_kv=dim, num_heads=num_heads)
         # self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
-        self.W_cross_attn = nn.Linear(dim, dim)
+        # self.W_cross_attn = nn.Linear(dim, dim)
         self.W_self_attn = nn.Linear(dim, dim)
         # self.self_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
         self.mlp = FeedForward(dim, mlp_dim)
@@ -102,12 +102,12 @@ class CrossAttentionBlock(nn.Module):
         k = kv
         v = kv
         # ca_out = self.sigmoid_ca(q, k, v) # sigmoid for cross-attention
-        ca_out = self.W_cross_attn(kv) #replace CA with linear layer
         # ca_out, _ = self.cross_attn(q, k, v, need_weights=False)
-        x = x + ca_out
+        ##### baseline 
+        # ca_out = self.W_cross_attn(kv) #replace CA with linear layer
+        # x = x + ca_out
 
         x = x + self.mlp(self.mlp_ln(x))
-
         qkv = self.sa_ln(x)
         sa_out = self.W_self_attn(qkv) # replace SA with linear layer
         # sa_out, _ = self.self_attn(qkv, qkv, qkv, need_weights=False)
