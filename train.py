@@ -55,6 +55,21 @@ global_vars = {
     "global_step": 0,
 }
 
+def compute_relative_state_shift(hidden_states, epsilon=1e-8):
+    """
+    arg: hidden_states: (N, T, D)
+    returns: relative_shift: (N, T-1, 1); l2(H_t - H_{t-1})/l2(H_{t-1})
+    """
+    h_t = hidden_states[:, 1:, :]
+    h_prev = hidden_states[:, :-1, :]
+    delta = h_t - h_prev
+    delta_norm = torch.norm(delta, p=2, dim=-1)
+    prev_norm = torch.norm(h_prev, p=2, dim=-1)
+    relative_shift = delta_norm / (prev_norm + epsilon)
+    return relative_shift
+
+
+
 @torch.no_grad()
 def run_validation(
     model: torch.nn.Module,
@@ -103,34 +118,23 @@ def run_validation(
     acc = (correct / total.clamp_min(1.0)).item()
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
     gate_means = model.val_update_gates.mean(0).tolist()
+    hidden_states = model.hidden_states
+    memory_l2_shift = compute_relative_state_shift(hidden_states).mean(0).tolist()
 
-    # if is_master and wandb.run:
-    #         data = [[t, g] for t, g in enumerate(gate_means)]
-    #         table = wandb.Table(data=data, columns=["timestep", "gate_value"])
-            
-    #         wandb.log({
-    #             "eval/loss": mean_loss,
-    #             "eval/acc": acc,
-    #             "eval/update_gate_plot": wandb.plot.line(
-    #                 table, 
-    #                 "timestep", 
-    #                 "gate_value", 
-    #                 title="Update Gate Avg over Time"
-    #             )
-    #         }, step=int(global_vars["global_step"]))
-    
     if is_master and wandb.run:
-        # Create a simple DataFrame-like list
-        data = [{"timestep": t, "gate": g} for t, g in enumerate(gate_means)]
+        def create_plotly_figure(data, title, y_label):
+            data = [{"timestep": t, y_label: g} for t, g in enumerate(data)] # dataframe like list
+            fig = px.line(data, x="timestep", y=y_label, title=title) #plotly line plot
+            return fig
         
-        # Create a standard Plotly figure
-        fig = px.line(data, x="timestep", y="gate", title="Update Gate Avg over Time")
-        
-        # Log the figure directly
+        fig_update_gate = create_plotly_figure(gate_means, "Update Gate over Time", "gate")
+        fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift")
+
         wandb.log({
             "eval/loss": mean_loss,
             "eval/acc": acc,
-            "eval/update_gate_plotly_curve": fig  # <--- Logs as media, enabling the slider!
+            "eval/update_gate": fig_update_gate,
+            "eval/memory_l2": fig_memory_l2,
         }, step=int(global_vars["global_step"]))
     
     if hasattr(model, "collect_update_gates"):
