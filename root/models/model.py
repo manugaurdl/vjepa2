@@ -70,6 +70,7 @@ class DinoFrameEncoder(nn.Module):
         if getattr(args, "val_dataset_len", None) is not None:
             self.update_gates = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.update_norms = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
+            self.r_novelty = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.hidden_states = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip, 384)
             self.collect_update_gates = False
 
@@ -99,19 +100,20 @@ class DinoFrameEncoder(nn.Module):
             frame_feats = f.reshape(B, T, -1)  # (B, T, D)
             
             if self.cache_dino_feats:
-                self.id_to_feat[ds_index] = frame_feats.cpu()
+                self.id_to_feat[ds_index] = frame_feats.detach().cpu()
                 return frame_feats
 
         frame_feats = self.encoder(frame_feats)  # (B, T, M)
 
         if self.encoder_type == "rnn":
             
-            hidden_states, final_state, timesteps_update_gate, timesteps_update_norm = frame_feats ### hidden_states[:,-1] == final_state
+            hidden_states, final_state, timesteps_update_gate, timesteps_update_norm, timesteps_r_novelty = frame_feats ### hidden_states[:,-1] == final_state
 
             if (not self.training) and getattr(self, "collect_update_gates", False):
                 self.update_gates[ds_index] = timesteps_update_gate.detach().cpu()
                 self.hidden_states[ds_index] = hidden_states.detach().cpu()
                 self.update_norms[ds_index] = timesteps_update_norm.detach().cpu()
+                self.r_novelty[ds_index] = timesteps_r_novelty.detach().cpu()
             return self.head(final_state)
         else:
             if self.pooling == "mean":

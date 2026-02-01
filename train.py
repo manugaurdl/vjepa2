@@ -120,6 +120,7 @@ def run_validation(
     gate_means = model.update_gates.mean(0).tolist()
     update_norms = model.update_norms.mean(0).tolist()
     hidden_states = model.hidden_states
+    r_novelty = model.r_novelty.mean(0).tolist()
     memory_l2_shift = compute_relative_state_shift(hidden_states).mean(0).tolist()
 
     if is_master and wandb.run:
@@ -131,10 +132,12 @@ def run_validation(
         fig_update_gate = create_plotly_figure(gate_means, "Update Gate over Time", "gate")
         fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm")
         fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift")
+        fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)")
 
         wandb.log({
             "eval/loss": mean_loss,
             "eval/acc": acc,
+            "eval/r_novelty": fig_r_novelty,
             "eval/update_gate": fig_update_gate,
             "eval/memory_l2": fig_memory_l2,
             "eval/update_norm": fig_update_norm,

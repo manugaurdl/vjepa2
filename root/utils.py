@@ -116,3 +116,22 @@ def dict_to_namespace(data):
         return [dict_to_namespace(v) for v in data]
     else:
         return data
+
+
+def compute_novelty_ratio(update, state):
+    # 1. Dot product along the feature dimension (B, S, 1)
+    dot_prod = torch.sum(update * state, dim=-1, keepdim=True)
+    # 2. Squared norm of the previous state (B, S, 1)
+    state_sq_norm = torch.sum(state * state, dim=-1, keepdim=True)
+    # 3. Calculate Projection (Redundant Info)
+    projection_scalar = dot_prod / (state_sq_norm + 1e-8)
+    u_redundant = projection_scalar * state
+    # 4. Calculate Rejection (Novel Delta) (u - u_redundant)
+    u_novel = update - u_redundant
+    # 5. Calculate Novelty Ratio
+    # We need L2 norms for the ratio calculation
+    novel_norm = torch.norm(u_novel, p=2, dim=-1)   # Shape: (B, S)
+    update_norm = torch.norm(update, p=2, dim=-1)   # Shape: (B, S)
+    r_novelty = novel_norm / (update_norm + 1e-8)
+
+    return r_novelty.detach().cpu()

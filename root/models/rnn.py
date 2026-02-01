@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from root.utils import compute_novelty_ratio
 
 
 class SigmoidAttention(nn.Module):
@@ -170,13 +171,15 @@ class GatedTransformerCore(nn.Module):
         h = self.transformer(inputs, kv)
         
         update = update_gate * h
+        #state update
         if self.decay_state:
             out = (1.0 - update_gate) * state + update
         else:
             out = state + update
         
+        r_novelty = compute_novelty_ratio(update, state)
         state = out
-        return out, state, update_gate.mean(-1).detach(), torch.norm(update, p=2, dim=-1).cpu()
+        return out, state, update_gate.mean(-1).detach().cpu(), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty
 
 
 class VideoRNNTransformerEncoder(nn.Module):
@@ -213,10 +216,12 @@ class VideoRNNTransformerEncoder(nn.Module):
         outs = []
         timesteps_update_gate = []
         timesteps_update_norm = []
+        timesteps_r_novelty = []
         for t in range(T):
-            out_t, state, update_gate, update_norm = self.core(x[:, t], state)  # (B,S,D)
+            out_t, state, update_gate, update_norm, r_novelty = self.core(x[:, t], state)  # (B,S,D)
             timesteps_update_gate.append(update_gate)
             timesteps_update_norm.append(update_norm)
+            timesteps_r_novelty.append(r_novelty)
             outs.append(out_t)
 
         outs = torch.stack(outs, dim=1)  # (B,T,S,D)
@@ -227,9 +232,11 @@ class VideoRNNTransformerEncoder(nn.Module):
 
         if return_all:
             update_gates = torch.stack(timesteps_update_gate, dim=1)  # (B,T,S)
-            update_norms = torch.stack(timesteps_update_norm, dim=1).squeeze(-1)  # (B,T,S)
+            update_norms = torch.stack(timesteps_update_norm, dim=1).squeeze(-1)  # (B,T)
+            r_novelty = torch.stack(timesteps_r_novelty, dim=1).squeeze(-1)  # (B,T)
+
             update_gates = update_gates.mean(-1)  # (B,T), average if S!=1
-            return outs, state, update_gates, update_norms
+            return outs, state, update_gates, update_norms, r_novelty  
 
         else:
             return outs[:, -1], state,
