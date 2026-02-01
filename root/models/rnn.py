@@ -169,14 +169,14 @@ class GatedTransformerCore(nn.Module):
         
         h = self.transformer(inputs, kv)
         
-        ## update
+        update = update_gate * h
         if self.decay_state:
-            out = (1.0 - update_gate) * state + update_gate * h
+            out = (1.0 - update_gate) * state + update
         else:
-            out = state + update_gate * h
+            out = state + update
         
         state = out
-        return out, state, update_gate.mean(-1).detach()
+        return out, state, update_gate.mean(-1).detach(), torch.norm(update, p=2, dim=-1).cpu()
 
 
 class VideoRNNTransformerEncoder(nn.Module):
@@ -212,9 +212,11 @@ class VideoRNNTransformerEncoder(nn.Module):
  
         outs = []
         timesteps_update_gate = []
+        timesteps_update_norm = []
         for t in range(T):
-            out_t, state, update_gate = self.core(x[:, t], state)  # (B,S,D)
+            out_t, state, update_gate, update_norm = self.core(x[:, t], state)  # (B,S,D)
             timesteps_update_gate.append(update_gate)
+            timesteps_update_norm.append(update_norm)
             outs.append(out_t)
 
         outs = torch.stack(outs, dim=1)  # (B,T,S,D)
@@ -225,8 +227,10 @@ class VideoRNNTransformerEncoder(nn.Module):
 
         if return_all:
             update_gates = torch.stack(timesteps_update_gate, dim=1)  # (B,T,S)
+            update_norms = torch.stack(timesteps_update_norm, dim=1).squeeze(-1)  # (B,T,S)
             update_gates = update_gates.mean(-1)  # (B,T), average if S!=1
-            return outs, state, update_gates
+            return outs, state, update_gates, update_norms
+
         else:
             return outs[:, -1], state,
 

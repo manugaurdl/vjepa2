@@ -117,7 +117,8 @@ def run_validation(
 
     acc = (correct / total.clamp_min(1.0)).item()
     mean_loss = (loss_sum / total.clamp_min(1.0)).item()
-    gate_means = model.val_update_gates.mean(0).tolist()
+    gate_means = model.update_gates.mean(0).tolist()
+    update_norms = model.update_norms.mean(0).tolist()
     hidden_states = model.hidden_states
     memory_l2_shift = compute_relative_state_shift(hidden_states).mean(0).tolist()
 
@@ -128,6 +129,7 @@ def run_validation(
             return fig
         
         fig_update_gate = create_plotly_figure(gate_means, "Update Gate over Time", "gate")
+        fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm")
         fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift")
 
         wandb.log({
@@ -135,6 +137,7 @@ def run_validation(
             "eval/acc": acc,
             "eval/update_gate": fig_update_gate,
             "eval/memory_l2": fig_memory_l2,
+            "eval/update_norm": fig_update_norm,
         }, step=int(global_vars["global_step"]))
     
     if hasattr(model, "collect_update_gates"):
