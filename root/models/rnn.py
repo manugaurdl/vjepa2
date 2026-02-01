@@ -133,9 +133,11 @@ class GatedTransformerCore(nn.Module):
     GRU-like gating around a cross-attention transformer.
     Inputs and state are sequences of tokens: (B, S, D).
     """
-    def __init__(self, dim: int, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None):
+    def __init__(self, dim: int, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False):
         super().__init__()
         mlp_dim = (4 * dim) if mlp_dim is None else mlp_dim
+
+        self.decay_state = decay_state # default = False i.e state not decayed
 
         self.state_ln = nn.LayerNorm(dim, eps=1e-6)
 
@@ -166,10 +168,13 @@ class GatedTransformerCore(nn.Module):
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
         
         h = self.transformer(inputs, kv)
+        
         ## update
-        out = (1.0 - update_gate) * state + update_gate * h
-        # out = state + update_gate * h
-
+        if self.decay_state:
+            out = (1.0 - update_gate) * state + update_gate * h
+        else:
+            out = state + update_gate * h
+        
         state = out
         return out, state, update_gate.mean(-1).detach()
 
@@ -187,10 +192,10 @@ class VideoRNNTransformerEncoder(nn.Module):
         else last_output: (B, D) or (B, S, D)
       - final_state: (B, 1, D) or (B, S, D)
     """
-    def __init__(self, dim: int, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None):
+    def __init__(self, dim: int, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True):
         super().__init__()
         self.core = GatedTransformerCore(
-            dim=dim, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
+            dim=dim, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state
         )
 
     def forward(self, x, state=None, return_all: bool = True):
