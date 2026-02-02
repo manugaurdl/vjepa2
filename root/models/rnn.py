@@ -165,19 +165,20 @@ class GatedTransformerCore(nn.Module):
         # kv = reset_gate * self.state_ln(state)
         
         ## no reset gate
-        kv = self.state_ln(state)
+        # kv = self.state_ln(state)
+        kv = state
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
         
         h = self.transformer(inputs, kv)
         
         update = update_gate * h
+        r_novelty = compute_novelty_ratio(update, state)
         #state update
         if self.decay_state:
             out = (1.0 - update_gate) * state + update
         else:
             out = state + update
-        
-        r_novelty = compute_novelty_ratio(update, state)
+        out = self.state_ln(out)
         state = out
         return out, state, update_gate.mean(-1).detach().cpu(), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty
 
