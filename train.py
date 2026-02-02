@@ -66,8 +66,9 @@ def compute_relative_state_shift(hidden_states, epsilon=1e-8):
     delta = h_t - h_prev
     delta_norm = torch.norm(delta, p=2, dim=-1)
     prev_norm = torch.norm(h_prev, p=2, dim=-1)
+    h_t_norm = torch.norm(h_t, p=2, dim=-1)
     relative_shift = delta_norm / (prev_norm + epsilon)
-    return relative_shift, cos_sim
+    return relative_shift, cos_sim, h_t_norm
 
 
 
@@ -122,10 +123,10 @@ def run_validation(
     update_norms = model.update_norms.mean(0).tolist()
     hidden_states = model.hidden_states
     r_novelty = model.r_novelty.mean(0).tolist()[1:] #skip first timestep
-    memory_l2_shift, cos_sim = compute_relative_state_shift(hidden_states)
+    memory_l2_shift, cos_sim, h_t_norm = compute_relative_state_shift(hidden_states)
     memory_l2_shift = memory_l2_shift.mean(0).tolist() #skip first shift (not computatble)
     cos_sim = cos_sim.mean(0).tolist() #skip first shift (not computatble)
-
+    h_t_norm = h_t_norm.mean(0).tolist()  # skip t=0, not useful
     if is_master and wandb.run:
         def create_plotly_figure(data, title, y_label, x_label):
             data = [{x_label: t, y_label: g} for t, g in enumerate(data)] # dataframe like list
@@ -137,6 +138,7 @@ def run_validation(
         fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1")
         fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift(h_t,h_{t-1})", "timestep+1")
         fig_cos_sim = create_plotly_figure(cos_sim, "cos_sim over Time", "cos_sim(h_t,h_{t-1})", "timestep+1")
+        fig_h_t_norm = create_plotly_figure(h_t_norm, "Memory norm over Time", "h_t_norm", "timestep+1")
 
         wandb.log({
             "eval/loss": mean_loss,
@@ -146,6 +148,7 @@ def run_validation(
             "eval/update_norm": fig_update_norm,
             "eval/memory_l2": fig_memory_l2,
             "eval/cos_sim": fig_cos_sim,
+            "eval/h_t_norm": fig_h_t_norm,
         }, step=int(global_vars["global_step"]))
     
     if hasattr(model, "collect_update_gates"):
