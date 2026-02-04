@@ -133,7 +133,7 @@ def run_validation(
             fig = px.line(data, x=x_label, y=y_label, title=title) #plotly line plot
             return fig
         
-        suffix = "precision weighting" if args.encoder.rnn.update_type == "surprise" else ""
+        suffix = "{precision weighting}" if args.encoder.rnn.update_type == "surprise" else ""
         fig_update_gate = create_plotly_figure(gate_means, f"Update Gate over Time {suffix}", "gate", "timestep")
         fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm", "timestep")
         fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1")
