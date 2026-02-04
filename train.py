@@ -71,6 +71,13 @@ def compute_relative_state_shift(hidden_states, epsilon=1e-8):
     return relative_shift, cos_sim, h_t_norm
 
 
+def _get_pred_error_l2(model: torch.nn.Module):
+    pred_error_l2 = getattr(model, "pred_error_l2", None)
+    if pred_error_l2 is None and isinstance(model, DistributedDataParallel):
+        pred_error_l2 = getattr(model.module, "pred_error_l2", None)
+    return pred_error_l2
+
+
 
 @torch.no_grad()
 def run_validation(
@@ -88,7 +95,9 @@ def run_validation(
         model.collect_update_gates = True
     correct = torch.tensor(0.0, device=device)
     total = torch.tensor(0.0, device=device)
-    loss_sum = torch.tensor(0.0, device=device)
+    ce_loss_sum = torch.tensor(0.0, device=device)
+    pred_loss_sum = torch.tensor(0.0, device=device)
+    pred_loss_weight = getattr(args.encoder.rnn, "pred_loss_weight", 0.0)
 
     for batch in tqdm(utils._iter_batches(loader), total=len(loader), desc=f"Validating epoch {epoch}"):
         clips = batch.clips
@@ -99,7 +108,12 @@ def run_validation(
         logits = model(x, ds_index)
         if model.cache_dino_feats:
             continue
-        loss_sum += F.cross_entropy(logits, y, reduction="sum")
+        ce_loss_sum += F.cross_entropy(logits, y, reduction="sum")
+        pred_error_l2 = _get_pred_error_l2(model)
+        if pred_error_l2 is not None:
+            pred_loss = pred_error_l2.mean(dim=(-1, -2))
+            pred_loss_sum += pred_loss.sum()
+        
         pred = logits.argmax(dim=1)
         correct += (pred == y).float().sum()
         total += float(y.numel())
@@ -115,10 +129,13 @@ def run_validation(
     if _is_distributed(world_size):
         dist.all_reduce(correct, op=dist.ReduceOp.SUM)
         dist.all_reduce(total, op=dist.ReduceOp.SUM)
-        dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(ce_loss_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(pred_loss_sum, op=dist.ReduceOp.SUM)
 
     acc = (correct / total.clamp_min(1.0)).item()
-    mean_loss = (loss_sum / total.clamp_min(1.0)).item()
+    mean_ce_loss = (ce_loss_sum / total.clamp_min(1.0)).item()
+    mean_pred_loss = (pred_loss_sum / total.clamp_min(1.0)).item()
+    mean_total_loss = ((ce_loss_sum + pred_loss_sum * pred_loss_weight) / total.clamp_min(1.0)).item()
     gate_means = model.update_gates.mean(0).tolist()
     update_norms = model.update_norms.mean(0).tolist()
     hidden_states = model.hidden_states
@@ -142,7 +159,10 @@ def run_validation(
         fig_h_t_norm = create_plotly_figure(h_t_norm, "Memory norm over Time", "h_t_norm", "timestep+1")
 
         wandb.log({
-            "eval/loss": mean_loss,
+            "eval/loss": mean_total_loss,
+            "eval/total_loss": mean_total_loss,
+            "eval/ce_loss": mean_ce_loss,
+            "eval/pred_loss": mean_pred_loss * pred_loss_weight,
             "eval/acc": acc,
             "eval/r_novelty": fig_r_novelty,
             "eval/update_gate": fig_update_gate,
@@ -155,7 +175,7 @@ def run_validation(
     if hasattr(model, "collect_update_gates"):
         model.collect_update_gates = False
     model.train()
-    return mean_loss, acc
+    return mean_total_loss, acc
 
 def main(args) -> None:
     # torchrun compatibility: prefer env vars if available, but still call repo helper.
@@ -208,6 +228,8 @@ def main(args) -> None:
             train_sampler.set_epoch(epoch)
 
         loss_meter = AverageMeter()
+        ce_loss_meter = AverageMeter()
+        pred_loss_meter = AverageMeter()
         it_time = AverageMeter()
 
         model.train()
@@ -224,16 +246,28 @@ def main(args) -> None:
             logits = model(x, ds_index)
             if model.cache_dino_feats:
                 continue
-            loss = F.cross_entropy(logits, y) / max(args.grad_accum, 1)
-            loss.backward()
+            pred_loss_weight = getattr(args.encoder.rnn, "pred_loss_weight", 0.0)
+            ce_loss = F.cross_entropy(logits, y)
+            pred_loss = torch.tensor(0.0, device=ce_loss.device)
+            if pred_loss_weight > 0.0:
+                pred_error_l2 = _get_pred_error_l2(model)
+                if pred_error_l2 is not None:
+                    pred_loss = pred_error_l2.mean()
+            total_loss = ce_loss + pred_loss_weight * pred_loss
+            total_loss = total_loss / max(args.grad_accum, 1)
+            total_loss.backward()
 
             if (it + 1) % max(args.grad_accum, 1) == 0:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
             # Logging ###???????
-            loss_reduced = _ddp_mean(loss.detach() * max(args.grad_accum, 1)).item()
-            loss_meter.update(loss_reduced, n=x.size(0))
+            ce_loss_reduced = _ddp_mean(ce_loss.detach()).item()
+            pred_loss_reduced = _ddp_mean((pred_loss * pred_loss_weight).detach()).item()
+            total_loss_reduced = _ddp_mean(total_loss.detach() * max(args.grad_accum, 1)).item()
+            loss_meter.update(total_loss_reduced, n=x.size(0))
+            ce_loss_meter.update(ce_loss_reduced, n=x.size(0))
+            pred_loss_meter.update(pred_loss_reduced, n=x.size(0))
             it_time.update((time.time() - t0) * 1000.0)
 
             if is_master and args.wandb.logging:
@@ -246,6 +280,9 @@ def main(args) -> None:
                     "trainer/epoch": epoch,
                     "trainer/step": global_vars["global_step"],
                     "trainer/loss": loss_meter.avg,
+                    "trainer/total_loss": loss_meter.avg,
+                    "trainer/ce_loss": ce_loss_meter.avg,
+                    "trainer/pred_loss": pred_loss_meter.avg,
                     "trainer/lr": optimizer.param_groups[0]["lr"],
                     "trainer/iter_ms_avg": it_time.avg,
                 }, step=global_vars["global_step"])

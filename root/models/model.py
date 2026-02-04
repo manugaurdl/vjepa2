@@ -107,7 +107,8 @@ class DinoFrameEncoder(nn.Module):
 
         if self.encoder_type == "rnn":
             
-            hidden_states, final_state, timesteps_update_gate, timesteps_update_norm, timesteps_r_novelty = frame_feats ### hidden_states[:,-1] == final_state
+            hidden_states, final_state, timesteps_update_gate, timesteps_update_norm, timesteps_r_novelty, pred_error_l2 = frame_feats ### hidden_states[:,-1] == final_state
+            self.pred_error_l2 = pred_error_l2
 
             if (not self.training) and getattr(self, "collect_update_gates", False):
                 self.update_gates[ds_index] = timesteps_update_gate.detach().cpu()
@@ -116,6 +117,7 @@ class DinoFrameEncoder(nn.Module):
                 self.r_novelty[ds_index] = timesteps_r_novelty.detach().cpu()
             return self.head(final_state)
         else:
+            self.pred_error_l2 = None
             if self.pooling == "mean":
                 pooled = frame_feats.mean(dim=1)
             elif self.pooling == "concat":

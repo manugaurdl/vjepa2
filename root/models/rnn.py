@@ -162,7 +162,7 @@ class GatedTransformerCore(nn.Module):
 
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
-
+        
         ## reset gate
         # reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
         # kv = reset_gate * self.state_ln(state)
@@ -173,11 +173,13 @@ class GatedTransformerCore(nn.Module):
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
         h = self.transformer(inputs, kv)
 
+        pred_error_l2 = None
         if self.update_type == "gru":
             update_gate = torch.sigmoid(self.input_update(inputs) + self.state_update(state))
             update = update_gate * h
         elif self.update_type == "surprise":
             error = h - self.w_pred(state)
+            pred_error_l2 = (error ** 2).sum(dim=-1)
             update_gate = torch.sigmoid(self.w_precision(error)) #precision weighting - all erros are not equal ;) 
             update = update_gate * error
         
@@ -190,7 +192,7 @@ class GatedTransformerCore(nn.Module):
             out = state + update
         out = self.state_ln(out)
         state = out
-        return out, state, update_gate.mean(-1).detach().cpu(), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty
+        return out, state, update_gate.mean(-1).detach().cpu(), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty, pred_error_l2
 
 
 class VideoRNNTransformerEncoder(nn.Module):
@@ -228,11 +230,14 @@ class VideoRNNTransformerEncoder(nn.Module):
         timesteps_update_gate = []
         timesteps_update_norm = []
         timesteps_r_novelty = []
+        timesteps_pred_error_l2 = []
         for t in range(T):
-            out_t, state, update_gate, update_norm, r_novelty = self.core(x[:, t], state)  # (B,S,D)
+            out_t, state, update_gate, update_norm, r_novelty, pred_error_l2 = self.core(x[:, t], state)  # (B,S,D)
             timesteps_update_gate.append(update_gate)
             timesteps_update_norm.append(update_norm)
             timesteps_r_novelty.append(r_novelty)
+            if pred_error_l2 is not None:
+                timesteps_pred_error_l2.append(pred_error_l2)
             outs.append(out_t)
 
         outs = torch.stack(outs, dim=1)  # (B,T,S,D)
@@ -247,7 +252,10 @@ class VideoRNNTransformerEncoder(nn.Module):
             r_novelty = torch.stack(timesteps_r_novelty, dim=1).squeeze(-1)  # (B,T)
 
             update_gates = update_gates.mean(-1)  # (B,T), average if S!=1
-            return outs, state, update_gates, update_norms, r_novelty  
+            pred_error_l2 = None
+            if timesteps_pred_error_l2:
+                pred_error_l2 = torch.stack(timesteps_pred_error_l2, dim=1)  # (B,T,S)
+            return outs, state, update_gates, update_norms, r_novelty, pred_error_l2  
 
         else:
             return outs[:, -1], state,
