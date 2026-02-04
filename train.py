@@ -133,11 +133,12 @@ def run_validation(
             fig = px.line(data, x=x_label, y=y_label, title=title) #plotly line plot
             return fig
         
-        fig_update_gate = create_plotly_figure(gate_means, "Update Gate over Time", "gate", "timestep")
+        suffix = "precision weighting" if args.encoder.rnn.update_type == "surprise" else ""
+        fig_update_gate = create_plotly_figure(gate_means, f"Update Gate over Time {suffix}", "gate", "timestep")
         fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm", "timestep")
         fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1")
         fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift(h_t,h_{t-1})", "timestep+1")
-        fig_cos_sim = create_plotly_figure(cos_sim, "cos_sim over Time", "cos_sim(h_t,h_{t-1})", "timestep+1")
+        fig_cos_sim = create_plotly_figure(cos_sim, "Memory direction similarity over Time", "cos_sim(h_t,h_{t-1})", "timestep+1")
         fig_h_t_norm = create_plotly_figure(h_t_norm, "Memory norm over Time", "h_t_norm", "timestep+1")
 
         wandb.log({

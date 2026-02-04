@@ -51,6 +51,7 @@ encoder:
     depth: 4
     cross_attn_dim: 2048
     decay_state: false
+    update_type: "surprise" # ["gru", "surprise"]
 pooling: "mean" # ["mean", "concat"]
 num_classes: 174
 

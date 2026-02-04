@@ -134,18 +134,22 @@ class GatedTransformerCore(nn.Module):
     GRU-like gating around a cross-attention transformer.
     Inputs and state are sequences of tokens: (B, S, D).
     """
-    def __init__(self, dim: int, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False):
         super().__init__()
         mlp_dim = (4 * dim) if mlp_dim is None else mlp_dim
 
         self.decay_state = decay_state # default = False i.e state not decayed
-
+        self.update_type = update_type
         self.state_ln = nn.LayerNorm(dim, eps=1e-6)
 
-        self.input_update = nn.Linear(dim, dim, bias=False)
-        self.input_reset = nn.Linear(dim, dim, bias=False)
-        self.state_update = nn.Linear(dim, dim, bias=False)
-        self.state_reset = nn.Linear(dim, dim, bias=False)
+        if self.update_type == "gru":
+            self.input_update = nn.Linear(dim, dim, bias=False)
+            self.state_update = nn.Linear(dim, dim, bias=False)
+            self.input_reset = nn.Linear(dim, dim, bias=False)
+            self.state_reset = nn.Linear(dim, dim, bias=False)
+        elif self.update_type == "surprise":
+            self.w_precision = nn.Linear(dim, dim, bias=False)
+            self.w_pred = nn.Linear(dim, dim, bias=False)
 
         # self.transformer = CrossAttentionTransformer(
         #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
@@ -158,8 +162,7 @@ class GatedTransformerCore(nn.Module):
 
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
-        update_gate = torch.sigmoid(self.input_update(inputs) + self.state_update(state))
-        
+
         ## reset gate
         # reset_gate = torch.sigmoid(self.input_reset(inputs) + self.state_reset(state))
         # kv = reset_gate * self.state_ln(state)
@@ -168,12 +171,19 @@ class GatedTransformerCore(nn.Module):
         # kv = self.state_ln(state)
         kv = state
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
-        
         h = self.transformer(inputs, kv)
+
+        if self.update_type == "gru":
+            update_gate = torch.sigmoid(self.input_update(inputs) + self.state_update(state))
+            update = update_gate * h
+        elif self.update_type == "surprise":
+            error = h - self.w_pred(state)
+            update_gate = torch.sigmoid(self.w_precision(error)) #precision weighting - all erros are not equal ;) 
+            update = update_gate * error
         
-        update = update_gate * h
         r_novelty = compute_novelty_ratio(update, state)
         #state update
+        
         if self.decay_state:
             out = (1.0 - update_gate) * state + update
         else:
@@ -196,10 +206,10 @@ class VideoRNNTransformerEncoder(nn.Module):
         else last_output: (B, D) or (B, S, D)
       - final_state: (B, 1, D) or (B, S, D)
     """
-    def __init__(self, dim: int, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True):
         super().__init__()
         self.core = GatedTransformerCore(
-            dim=dim, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state
+            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state
         )
 
     def forward(self, x, state=None, return_all: bool = True):

@@ -78,6 +78,6 @@ def build_encoder(encoder_cfg: Any, *, input_dim: int) -> Tuple[nn.Module, int]:
         out_dim = encoder.out_dim
     elif enc_type == "rnn":
         rnn_cfg = encoder_cfg.rnn
-        encoder = VideoRNNTransformerEncoder(dim=rnn_cfg.hidden_dim, num_layers=rnn_cfg.depth, num_heads=8, mlp_dim=4*rnn_cfg.hidden_dim, cross_attn_dim=rnn_cfg.cross_attn_dim, decay_state=rnn_cfg.decay_state)
+        encoder = VideoRNNTransformerEncoder(dim=rnn_cfg.hidden_dim, update_type=rnn_cfg.update_type, num_layers=rnn_cfg.depth, num_heads=8, mlp_dim=4*rnn_cfg.hidden_dim, cross_attn_dim=rnn_cfg.cross_attn_dim, decay_state=rnn_cfg.decay_state)
         out_dim = rnn_cfg.hidden_dim
     return encoder, out_dim
