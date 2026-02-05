@@ -138,6 +138,8 @@ def run_validation(
     mean_total_loss = ((ce_loss_sum + pred_loss_sum * pred_loss_weight) / total.clamp_min(1.0)).item()
     gate_means = model.update_gates.mean(0).tolist()
     update_norms = model.update_norms.mean(0).tolist()
+    pred_error_l2s = getattr(model, "pred_error_l2s", None)
+    pred_error_l2_mean = pred_error_l2s.mean(0).tolist()[1:] if pred_error_l2s is not None else None
     hidden_states = model.hidden_states
     r_novelty = model.r_novelty.mean(0).tolist()[1:] #skip first timestep
     memory_l2_shift, cos_sim, h_t_norm = compute_relative_state_shift(hidden_states)
@@ -153,6 +155,11 @@ def run_validation(
         suffix = "{precision weighting}" if args.encoder.rnn.update_type == "surprise" else ""
         fig_update_gate = create_plotly_figure(gate_means, f"Update Gate over Time {suffix}", "gate", "timestep")
         fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm", "timestep")
+        fig_pred_error_l2 = None
+        if pred_error_l2_mean is not None:
+            fig_pred_error_l2 = create_plotly_figure(
+                pred_error_l2_mean, f"Prediction Error L2 over Time {suffix}", "pred_error_l2", "timestep"
+            )
         fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1")
         fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift(h_t,h_{t-1})", "timestep+1")
         fig_cos_sim = create_plotly_figure(cos_sim, "Memory direction similarity over Time", "cos_sim(h_t,h_{t-1})", "timestep+1")
@@ -170,6 +177,7 @@ def run_validation(
             "eval/memory_l2": fig_memory_l2,
             "eval/cos_sim": fig_cos_sim,
             "eval/h_t_norm": fig_h_t_norm,
+            **({"eval/pred_error_l2": fig_pred_error_l2} if fig_pred_error_l2 is not None else {}),
         }, step=int(global_vars["global_step"]))
     
     if hasattr(model, "collect_update_gates"):

@@ -72,6 +72,7 @@ class DinoFrameEncoder(nn.Module):
             self.update_norms = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.r_novelty = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.hidden_states = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip, 384)
+            self.pred_error_l2s = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.collect_update_gates = False
 
 
@@ -115,6 +116,8 @@ class DinoFrameEncoder(nn.Module):
                 self.hidden_states[ds_index] = hidden_states.detach().cpu()
                 self.update_norms[ds_index] = timesteps_update_norm.detach().cpu()
                 self.r_novelty[ds_index] = timesteps_r_novelty.detach().cpu()
+                if pred_error_l2 is not None:
+                    self.pred_error_l2s[ds_index] = pred_error_l2.mean(dim=-1).detach().cpu()
             return self.head(final_state)
         else:
             self.pred_error_l2 = None
