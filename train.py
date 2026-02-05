@@ -110,8 +110,8 @@ def run_validation(
             continue
         ce_loss_sum += F.cross_entropy(logits, y, reduction="sum")
         pred_error_l2 = _get_pred_error_l2(model)
-        if pred_error_l2 is not None:
-            pred_loss = pred_error_l2.mean(dim=(-1, -2))
+        if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
+            pred_loss = pred_error_l2[:, 1:].mean(dim=(-1, -2))
             pred_loss_sum += pred_loss.sum()
         
         pred = logits.argmax(dim=1)
@@ -259,8 +259,8 @@ def main(args) -> None:
             pred_loss = torch.tensor(0.0, device=ce_loss.device)
             if pred_loss_weight > 0.0:
                 pred_error_l2 = _get_pred_error_l2(model)
-                if pred_error_l2 is not None:
-                    pred_loss = pred_error_l2.mean()
+                if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
+                    pred_loss = pred_error_l2[:, 1:].mean()
             total_loss = ce_loss + pred_loss_weight * pred_loss
             total_loss = total_loss / max(args.grad_accum, 1)
             total_loss.backward()
