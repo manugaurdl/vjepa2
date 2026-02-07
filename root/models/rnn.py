@@ -129,6 +129,18 @@ class CrossAttentionTransformer(nn.Module):
         return self.out_ln(x)
 
 
+class MLP(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.fc1 = nn.Linear(in_features, out_features)
+        self.fc2 = nn.Linear(out_features, out_features)
+        self.relu = nn.ReLU()
+        
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
 class GatedTransformerCore(nn.Module):
     """
     GRU-like gating around a cross-attention transformer.
@@ -149,7 +161,7 @@ class GatedTransformerCore(nn.Module):
             self.state_reset = nn.Linear(dim, dim, bias=False)
         elif self.update_type == "surprise":
             self.w_precision = nn.Linear(dim, dim, bias=False)
-            self.w_pred = nn.Linear(dim, dim, bias=False)
+            self.w_pred = MLP(dim, dim)
 
         # self.transformer = CrossAttentionTransformer(
         #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
