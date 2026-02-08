@@ -169,7 +169,7 @@ def run_validation(
             "eval/loss": mean_total_loss,
             "eval/total_loss": mean_total_loss,
             "eval/ce_loss": mean_ce_loss,
-            "eval/pred_loss": mean_pred_loss * pred_loss_weight,
+            "eval/pred_loss": mean_pred_loss,
             "eval/acc": acc,
             "eval/r_novelty": fig_r_novelty,
             "eval/update_gate": fig_update_gate,
