@@ -297,9 +297,11 @@ def main(args) -> None:
 
             if (global_vars["global_step"]+1) % args.val_freq == 0:
                 _vloss, acc = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
+                model_state = model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict()
                 if acc > global_vars["best_acc"]:
                     global_vars["best_acc"] = acc
-                    utils.save_checkpoint(optimizer, args, epoch, global_step, model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict(), logger)
+                    utils.save_checkpoint(optimizer, args, epoch, global_step, model_state, logger, ckpt_name="best")
+                utils.save_checkpoint(optimizer, args, epoch, global_step, model_state, logger, ckpt_name="last")
                 
             global_vars["global_step"] += 1
 

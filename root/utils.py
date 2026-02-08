@@ -84,18 +84,19 @@ def _iter_batches(loader: Iterable) -> Iterable[TrainBatch]:
             labels = torch.as_tensor(labels)
         yield TrainBatch(clips=clips, labels=labels, ds_index=index)
 
-def save_checkpoint(optimizer, args, epoch, global_step, state_dict, logger):
-    ckpt_path = os.path.join(args.output_dir, f"best.pt")
+def save_checkpoint(optimizer, args, epoch, global_step, state_dict, logger, ckpt_name: str = "best"):
+    os.makedirs(args.output_dir, exist_ok=True)
+    ckpt_path = os.path.join(args.output_dir, f"{ckpt_name}.pt")
     with open(os.path.join(args.output_dir, "config.json"), "w") as f:
         json.dump(namespace_to_dict(args), f, indent=4)
     to_save = {
         "epoch": epoch,
+        "global_step": global_step,
         "model": state_dict,
         "opt": optimizer.state_dict(),
         "args": vars(args),
     }
     torch.save(to_save, ckpt_path)
-    logger.info(f"Saved checkpoint: {ckpt_path}")
 
 def namespace_to_dict(obj):
     if isinstance(obj, argparse.Namespace):
