@@ -162,15 +162,17 @@ class GatedTransformerCore(nn.Module):
         elif self.update_type == "surprise":
             self.w_precision = nn.Linear(dim, dim, bias=False)
             self.w_pred = MLP(dim, dim)
+            self.encoder = nn.Linear(dim, dim, bias=False)
 
         # self.transformer = CrossAttentionTransformer(
         #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
         # )
         # self.W_input = nn.Linear(dim, dim, bias=False)
         # self.W_state = nn.Linear(dim, dim, bias=False)
-        self.transformer = CrossAttentionTransformer(
-            num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
-        )
+        
+        # self.transformer = CrossAttentionTransformer(
+        #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
+        # )
 
     def forward(self, inputs, state):
         # inputs/state: (B, S, D)
@@ -183,7 +185,8 @@ class GatedTransformerCore(nn.Module):
         # kv = self.state_ln(state)
         kv = state
         # h = torch.tanh(self.W_input(inputs) + self.W_state(kv)) # replace transformer with GRU linear layers
-        h = self.transformer(inputs, kv)
+        # h = self.transformer(inputs, kv)
+        h = self.encoder(inputs)
 
         pred_error_l2 = None
         if self.update_type == "gru":
