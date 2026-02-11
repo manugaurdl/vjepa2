@@ -202,7 +202,7 @@ class GatedTransformerCore(nn.Module):
             # update_gate = torch.sigmoid(self.w_precision(pred_error_l2)) ## energy based gating
     
             # update = update_gate * error
-            update = error
+            update = self.w_precision(error)
         
         r_novelty = compute_novelty_ratio(update, state)
         #state update
