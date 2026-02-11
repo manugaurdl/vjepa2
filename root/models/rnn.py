@@ -195,7 +195,12 @@ class GatedTransformerCore(nn.Module):
         elif self.update_type == "surprise":
             error = h - self.w_pred(state)
             pred_error_l2 = (error ** 2).sum(dim=-1)
-            update_gate = torch.sigmoid(self.w_precision(error)) #precision weighting - all erros are not equal ;) 
+    
+            ####precision weighting - all erros are not equal ;) 
+            # update_gate = torch.sigmoid(self.w_precision(error)) ##error
+            update_gate = torch.sigmoid(self.w_precision(error.abs())) ## magnitude based gating
+            # update_gate = torch.sigmoid(self.w_precision(pred_error_l2)) ## energy based gating
+    
             update = update_gate * error
         
         r_novelty = compute_novelty_ratio(update, state)
