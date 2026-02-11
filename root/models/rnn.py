@@ -198,10 +198,11 @@ class GatedTransformerCore(nn.Module):
     
             ####precision weighting - all erros are not equal ;) 
             # update_gate = torch.sigmoid(self.w_precision(error)) ##error
-            update_gate = torch.sigmoid(self.w_precision(error.abs())) ## magnitude based gating
+            # update_gate = torch.sigmoid(self.w_precision(error.abs())) ## magnitude based gating
             # update_gate = torch.sigmoid(self.w_precision(pred_error_l2)) ## energy based gating
     
-            update = update_gate * error
+            # update = update_gate * error
+            update = error
         
         r_novelty = compute_novelty_ratio(update, state)
         #state update
@@ -212,7 +213,8 @@ class GatedTransformerCore(nn.Module):
             out = state + update
         out = self.state_ln(out)
         state = out
-        return out, state, update_gate.mean(-1).detach().cpu(), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty, pred_error_l2
+        return out, state, torch.zeros((out.size(0), 1)), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty, pred_error_l2
+        # return out, state, update_gate.mean(-1).detach().cpu(), torch.norm(update, p=2, dim=-1).detach().cpu(), r_novelty, pred_error_l2
 
 
 class VideoRNNTransformerEncoder(nn.Module):
