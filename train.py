@@ -138,7 +138,10 @@ def run_validation(
     acc = (correct / total.clamp_min(1.0)).item()
     mean_ce_loss = (ce_loss_sum / total.clamp_min(1.0)).item()
     mean_pred_loss = (pred_loss_sum / total.clamp_min(1.0)).item()
-    mean_total_loss = ((ce_loss_sum + pred_loss_sum * pred_loss_weight) / total.clamp_min(1.0)).item()
+    if getattr(args, "action_classification", True):
+        mean_total_loss = ((ce_loss_sum + pred_loss_sum * pred_loss_weight) / total.clamp_min(1.0)).item()
+    else:
+        mean_total_loss = (pred_loss_sum / total.clamp_min(1.0)).item()
     gate_means = model.update_gates.mean(0).tolist()
     update_norms = model.update_norms.mean(0).tolist()
     pred_error_l2s = getattr(model, "pred_error_l2s", None)
@@ -262,11 +265,14 @@ def main(args) -> None:
             pred_loss = torch.tensor(0.0, device=device)
             if getattr(args, "action_classification", True):
                 ce_loss = F.cross_entropy(logits, y)
-            if getattr(args, "next_frame_pred", True) and pred_loss_weight > 0.0:
+            if getattr(args, "next_frame_pred", True):
                 pred_error_l2 = _get_pred_error_l2(model)
                 if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
                     pred_loss = pred_error_l2[:, 1:].mean()
-            total_loss = ce_loss + pred_loss_weight * pred_loss
+            if getattr(args, "action_classification", True):
+                total_loss = ce_loss + pred_loss_weight * pred_loss
+            else:
+                total_loss = pred_loss
             total_loss = total_loss / max(args.grad_accum, 1)
             total_loss.backward()
 
