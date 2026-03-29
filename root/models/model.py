@@ -39,6 +39,7 @@ class DinoFrameEncoder(nn.Module):
         num_classes: int,
         pooling: str = "mean",
         freeze_dino: bool = True,
+        action_classification: bool = True,
     ):
         super().__init__()
         self.dino = dino
@@ -58,7 +59,8 @@ class DinoFrameEncoder(nn.Module):
             elif self.pooling == "mean":
                 head_in_dim = encoder_out_dim
 
-        self.head = nn.Linear(head_in_dim, num_classes)
+        self.action_classification = action_classification
+        self.head = nn.Linear(head_in_dim, num_classes) if action_classification else None
 
         if self.freeze_dino and (self.dino is not None):
             for p in self.dino.parameters():
@@ -118,14 +120,18 @@ class DinoFrameEncoder(nn.Module):
                 self.r_novelty[ds_index] = timesteps_r_novelty.detach().cpu()
                 if pred_error_l2 is not None:
                     self.pred_error_l2s[ds_index] = pred_error_l2.mean(dim=-1).detach().cpu()
-            return self.head(final_state)
+            if self.head is not None:
+                return self.head(final_state)
+            return final_state
         else:
             self.pred_error_l2 = None
             if self.pooling == "mean":
                 pooled = frame_feats.mean(dim=1)
             elif self.pooling == "concat":
                 pooled = frame_feats.reshape(B, -1)  # (B, T*M)
-            return self.head(pooled)
+            if self.head is not None:
+                return self.head(pooled)
+            return pooled
 
 
 def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
@@ -150,6 +156,7 @@ def _build_model(args: argparse.Namespace, device: torch.device) -> nn.Module:
         num_classes=args.num_classes,
         pooling=args.pooling,
         freeze_dino=args.freeze_dino,
+        action_classification=getattr(args, "action_classification", True),
     )
     return model.to(device)
 

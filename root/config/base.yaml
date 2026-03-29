@@ -55,6 +55,8 @@ encoder:
     pred_loss_weight: 0.01
 pooling: "mean" # ["mean", "concat"]
 num_classes: 174
+next_frame_pred: true
+action_classification: true
 
 # --- Optimization ---
 epochs: 17

@@ -108,15 +108,18 @@ def run_validation(
         logits = model(x, ds_index)
         if model.cache_dino_feats:
             continue
-        ce_loss_sum += F.cross_entropy(logits, y, reduction="sum")
-        pred_error_l2 = _get_pred_error_l2(model)
-        if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
-            pred_loss = pred_error_l2[:, 1:].mean(dim=(-1, -2))
-            pred_loss_sum += pred_loss.sum()
+        if getattr(args, "action_classification", True):
+            ce_loss_sum += F.cross_entropy(logits, y, reduction="sum")
+        if getattr(args, "next_frame_pred", True):
+            pred_error_l2 = _get_pred_error_l2(model)
+            if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
+                pred_loss = pred_error_l2[:, 1:].mean(dim=(-1, -2))
+                pred_loss_sum += pred_loss.sum()
         
-        pred = logits.argmax(dim=1)
-        correct += (pred == y).float().sum()
         total += float(y.numel())
+        if getattr(args, "action_classification", True):
+            pred = logits.argmax(dim=1)
+            correct += (pred == y).float().sum()
     
     if model.cache_dino_feats:
         save_dir = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1])
@@ -255,9 +258,11 @@ def main(args) -> None:
             if model.cache_dino_feats:
                 continue
             pred_loss_weight = getattr(args.encoder.rnn, "pred_loss_weight", 0.0)
-            ce_loss = F.cross_entropy(logits, y)
-            pred_loss = torch.tensor(0.0, device=ce_loss.device)
-            if pred_loss_weight > 0.0:
+            ce_loss = torch.tensor(0.0, device=device)
+            pred_loss = torch.tensor(0.0, device=device)
+            if getattr(args, "action_classification", True):
+                ce_loss = F.cross_entropy(logits, y)
+            if getattr(args, "next_frame_pred", True) and pred_loss_weight > 0.0:
                 pred_error_l2 = _get_pred_error_l2(model)
                 if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
                     pred_loss = pred_error_l2[:, 1:].mean()
