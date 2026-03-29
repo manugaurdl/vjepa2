@@ -1,4 +1,4 @@
-inference.html
+*.html
 inference.ipynb
 .venv
 wandb/
