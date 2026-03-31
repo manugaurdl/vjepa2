@@ -146,7 +146,7 @@ class GatedTransformerCore(nn.Module):
     GRU-like gating around a cross-attention transformer.
     Inputs and state are sequences of tokens: (B, S, D).
     """
-    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False, predict_in_dino_space: bool = False):
         super().__init__()
         mlp_dim = (4 * dim) if mlp_dim is None else mlp_dim
 
@@ -162,7 +162,7 @@ class GatedTransformerCore(nn.Module):
         elif self.update_type == "surprise":
             self.w_precision = nn.Linear(dim, dim, bias=False)
             self.w_pred = MLP(dim, dim)
-            self.encoder = nn.Linear(dim, dim, bias=False)
+            self.encoder = nn.Identity() if predict_in_dino_space else nn.Linear(dim, dim, bias=False)
 
         # self.transformer = CrossAttentionTransformer(
         #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
@@ -230,10 +230,10 @@ class VideoRNNTransformerEncoder(nn.Module):
         else last_output: (B, D) or (B, S, D)
       - final_state: (B, 1, D) or (B, S, D)
     """
-    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True, predict_in_dino_space: bool = False):
         super().__init__()
         self.core = GatedTransformerCore(
-            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state
+            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state, predict_in_dino_space=predict_in_dino_space
         )
 
     def forward(self, x, state=None, return_all: bool = True):
