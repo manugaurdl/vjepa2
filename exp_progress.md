@@ -32,5 +32,8 @@
 - **Goal**: train RNN purely on next-frame prediction (no classification head)
 - **Result**: (pending)
 
+## Tools
+- **analyze_wandb_run.py**: `python analyze_wandb_run.py <user>/<project>/<run_id>` — fetches and prints final eval/train metrics and loss trajectory from a wandb run
+
 ## Open Questions
 -
