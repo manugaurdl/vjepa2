@@ -1,0 +1,2 @@
+I am building upon vjepa's repository. The entry point of the codebase is train.py. My codebase utilizes functionalities from vjepa's repo (src/). The code I have written resides insied root/.
+I am training a RNN on something something v2 dataset.
