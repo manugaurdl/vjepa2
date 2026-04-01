@@ -54,5 +54,60 @@ The primary goal is building a good **next-frame predictor** in DINO feature spa
 ## Tools
 - **analyze_wandb_run.py**: `python analyze_wandb_run.py <user>/<project>/<run_id>` — fetches and prints final eval/train metrics and loss trajectory from a wandb run
 
+## Transfer & OOD Evaluation
+
+Beyond SSv2 metrics, we need to know if the recurrent state captures **general visual dynamics** or is overfit to SSv2 action patterns. Two evals answer this:
+
+### Eval 1: Transfer Linear Probe (UCF101)
+
+Freeze the trained encoder, train a fresh linear head on UCF101 (101 classes, ~13K videos). Compare against a DINO mean-pool baseline (no RNN).
+
+**What to look for:**
+- RNN state accuracy vs DINO baseline: if RNN is significantly better, the recurrent state adds value beyond averaging DINO features
+- If RNN accuracy ≈ baseline: the state isn't capturing useful temporal structure that transfers
+- If RNN accuracy < baseline: the state is actively discarding information useful for other tasks (overfit to SSv2)
+
+**How to run:**
+```bash
+# RNN transfer
+python eval_transfer.py --checkpoint /path/to/best.pt --mode probe \
+    --train_csv /nas/manu/ucf101/data/train.csv \
+    --data_csv /nas/manu/ucf101/data/test.csv \
+    --num_classes 101 --output_dir outputs/eval_probe
+
+# DINO mean-pool baseline
+python eval_transfer.py --checkpoint /path/to/best.pt --mode probe --baseline \
+    --train_csv /nas/manu/ucf101/data/train.csv \
+    --data_csv /nas/manu/ucf101/data/test.csv \
+    --num_classes 101 --output_dir outputs/eval_probe_baseline
+```
+
+**Outputs:** `probe_results.json` with `best_acc`, `final_acc`, etc.
+
+### Eval 2: OOD Prediction Error Decay Curve
+
+Run inference on SSv2 val AND UCF101 test, collect `pred_error_l2` per timestep, compare curves.
+
+**What to look for:**
+- Similar decay shape on both → model learned general dynamics
+- Much higher/flatter pred_error on UCF101 → model memorized SSv2-specific temporal patterns
+- Also compare: update_norms, r_novelty, hidden state norms across distributions
+
+**How to run:**
+```bash
+python eval_transfer.py --checkpoint /path/to/best.pt --mode decay \
+    --data_csv /nas/manu/ucf101/data/test.csv \
+    --ssv2_val_csv /nas/manu/ssv2/data/validation.csv \
+    --output_dir outputs/eval_decay
+```
+
+**Outputs:** `pred_error_decay.png`, `update_norm_decay.png`, `hidden_state_norm_decay.png`, `novelty_ratio_decay.png`, plus raw tensors `decay_ssv2.pt` and `decay_ood.pt`.
+
+### UCF101 Setup
+```bash
+bash scripts/prepare_ucf101.sh /nas/manu/ucf101
+```
+Downloads videos (~7GB) + train/test splits, generates CSVs at `/nas/manu/ucf101/data/{train,test}.csv`.
+
 ## Open Questions
 -
