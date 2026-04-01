@@ -26,6 +26,20 @@ Usage:
       --data_csv /nas/manu/ucf101/data/test.csv \
       --ssv2_val_csv /nas/manu/ssv2/data/validation.csv \
       --num_classes 101 --output_dir outputs/eval
+
+  # SSv2 linear probe (Eval E) — for models trained with prediction only
+  python eval_transfer.py --checkpoint best.pt --mode probe \
+      --train_csv /nas/manu/ssv2/data/train.csv \
+      --data_csv /nas/manu/ssv2/data/validation.csv \
+      --data_dir /nas/manu \
+      --num_classes 174 --output_dir outputs/eval_ssv2_probe
+
+  # SSv2 linear probe baseline (DINO mean-pool)
+  python eval_transfer.py --checkpoint best.pt --mode probe --baseline \
+      --train_csv /nas/manu/ssv2/data/train.csv \
+      --data_csv /nas/manu/ssv2/data/validation.csv \
+      --data_dir /nas/manu \
+      --num_classes 174 --output_dir outputs/eval_ssv2_probe_baseline
 """
 
 from __future__ import annotations
@@ -58,13 +72,16 @@ from root.utils import dict_to_namespace, set_seed, compute_relative_state_shift
 # ---------------------------------------------------------------------------
 
 class SimpleVideoDataset(Dataset):
-    """Reads a space-delimited CSV with absolute video paths and integer labels.
+    """Reads a space-delimited CSV with video paths and integer labels.
+
+    Paths can be absolute or relative. If data_dir is provided, relative paths
+    are resolved as os.path.join(data_dir, path).
 
     Returns (clip_list, label, clip_indices, index) matching the interface
     expected by root.utils._iter_batches.
     """
 
-    def __init__(self, csv_path, frames_per_clip=8, transform=None):
+    def __init__(self, csv_path, frames_per_clip=8, transform=None, data_dir=None):
         from decord import VideoReader, cpu  # noqa: F811
 
         self.frames_per_clip = frames_per_clip
@@ -79,7 +96,10 @@ class SimpleVideoDataset(Dataset):
                 parts = line.strip().split()
                 if len(parts) < 2:
                     continue
-                self.samples.append(parts[0])
+                path = parts[0]
+                if data_dir and not os.path.isabs(path):
+                    path = os.path.join(data_dir, path)
+                self.samples.append(path)
                 self.labels.append(int(parts[1]))
 
     def __len__(self):
@@ -161,9 +181,9 @@ def build_baseline_model(device):
     return model
 
 
-def make_loader(csv_path, frames_per_clip, crop_size, batch_size, num_workers, mode="eval"):
+def make_loader(csv_path, frames_per_clip, crop_size, batch_size, num_workers, mode="eval", data_dir=None):
     transform = make_transforms(mode=mode, crop_size=crop_size)
-    ds = SimpleVideoDataset(csv_path, frames_per_clip=frames_per_clip, transform=transform)
+    ds = SimpleVideoDataset(csv_path, frames_per_clip=frames_per_clip, transform=transform, data_dir=data_dir)
     loader = DataLoader(
         ds,
         batch_size=batch_size,
@@ -247,13 +267,14 @@ def run_probe(args):
 
     # Data
     train_mode = "eval" if args.no_aug else "train"
+    data_dir = getattr(args, "data_dir", None)
     train_ds, train_loader = make_loader(
         args.train_csv, args.frames_per_clip, args.crop_size,
-        args.batch_size, args.num_workers, mode=train_mode,
+        args.batch_size, args.num_workers, mode=train_mode, data_dir=data_dir,
     )
     val_ds, val_loader = make_loader(
         args.data_csv, args.frames_per_clip, args.crop_size,
-        args.batch_size, args.num_workers, mode="eval",
+        args.batch_size, args.num_workers, mode="eval", data_dir=data_dir,
     )
     print(f"Train: {len(train_ds)} videos, Val: {len(val_ds)} videos")
     if args.no_aug:
@@ -501,16 +522,17 @@ def run_decay(args):
     model, saved_args = load_model_from_checkpoint(args.checkpoint, device)
     model.eval()
 
+    data_dir = getattr(args, "data_dir", None)
     # OOD dataset
     ood_ds, ood_loader = make_loader(
         args.data_csv, args.frames_per_clip, args.crop_size,
-        args.batch_size, args.num_workers,
+        args.batch_size, args.num_workers, data_dir=data_dir,
     )
 
     # SSv2 val dataset
     ssv2_ds, ssv2_loader = make_loader(
         args.ssv2_val_csv, args.frames_per_clip, args.crop_size,
-        args.batch_size, args.num_workers,
+        args.batch_size, args.num_workers, data_dir=data_dir,
     )
 
     print(f"OOD dataset: {len(ood_ds)} videos")
@@ -552,7 +574,8 @@ def parse_args():
     p.add_argument("--data_csv", type=str, required=True, help="OOD eval/test CSV (absolute paths)")
     p.add_argument("--train_csv", type=str, default=None, help="OOD train CSV (for probe mode)")
     p.add_argument("--ssv2_val_csv", type=str, default=None, help="SSv2 validation CSV (for decay mode)")
-    p.add_argument("--num_classes", type=int, default=101, help="Number of classes in OOD dataset")
+    p.add_argument("--num_classes", type=int, default=101, help="Number of classes in dataset")
+    p.add_argument("--data_dir", type=str, default=None, help="Prefix for relative paths in CSVs (e.g. /nas/manu for SSv2)")
 
     # Model / data
     p.add_argument("--frames_per_clip", type=int, default=8)
