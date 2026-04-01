@@ -186,6 +186,36 @@ def iter_batches(loader):
         yield x, labels, index
 
 
+def _extract_features(model, x, ds_idx):
+    """Run frozen encoder and return features before the classification head.
+
+    For RNN: returns final_state (B, D).
+    For linear/mean-pool: returns mean-pooled DINO features (B, D).
+    """
+    m = model.module if hasattr(model, "module") else model
+
+    if m.dino is None:
+        frame_feats = x
+    else:
+        B, C, T, H, W = x.shape
+        frames = x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+        with torch.no_grad():
+            from root.models.model import _dinov2_frame_features
+            f = _dinov2_frame_features(m.dino, frames)
+        frame_feats = f.reshape(B, T, -1)
+
+    enc_out = m.encoder(frame_feats)
+
+    if m.encoder_type == "rnn":
+        hidden_states, final_state, *_ = enc_out
+        return final_state
+    else:
+        if m.pooling == "mean":
+            return enc_out.mean(dim=1)
+        elif m.pooling == "concat":
+            return enc_out.reshape(enc_out.size(0), -1)
+
+
 # ---------------------------------------------------------------------------
 # Eval 1: Transfer Linear Probe
 # ---------------------------------------------------------------------------
@@ -217,18 +247,27 @@ def run_probe(args):
     model.action_classification = True
 
     # Data
+    train_mode = "eval" if args.no_aug else "train"
     train_ds, train_loader = make_loader(
         args.train_csv, args.frames_per_clip, args.crop_size,
-        args.batch_size, args.num_workers, mode="train",
+        args.batch_size, args.num_workers, mode=train_mode,
     )
     val_ds, val_loader = make_loader(
         args.data_csv, args.frames_per_clip, args.crop_size,
         args.batch_size, args.num_workers, mode="eval",
     )
     print(f"Train: {len(train_ds)} videos, Val: {len(val_ds)} videos")
+    if args.no_aug:
+        print("No augmentation (eval transforms for train)")
+    if args.cache_features:
+        print("Feature caching enabled — will cache on first epoch")
 
     # Optimizer (only head params)
     optimizer = torch.optim.AdamW(model.head.parameters(), lr=args.lr, weight_decay=0.01)
+
+    # Feature caching state
+    train_cache = None  # will be (features_tensor, labels_tensor) after epoch 0
+    val_cache = None
 
     # Training loop
     best_acc = 0.0
@@ -239,36 +278,110 @@ def run_probe(args):
             model.dino.eval()
 
         loss_sum, n_samples = 0.0, 0
-        for x, y, ds_idx in tqdm(iter_batches(train_loader), total=len(train_loader), desc=f"Probe train epoch {epoch}"):
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, dtype=torch.long, non_blocking=True)
 
-            logits = model(x, ds_idx)
-            loss = F.cross_entropy(logits, y)
+        if train_cache is not None:
+            # Train on cached features (fast path)
+            cached_feats, cached_labels = train_cache
+            perm = torch.randperm(cached_feats.size(0))
+            for i in range(0, cached_feats.size(0), args.batch_size):
+                idx = perm[i : i + args.batch_size]
+                feats = cached_feats[idx].to(device, non_blocking=True)
+                y = cached_labels[idx].to(device, non_blocking=True)
 
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
+                logits = model.head(feats)
+                loss = F.cross_entropy(logits, y)
 
-            loss_sum += loss.item() * x.size(0)
-            n_samples += x.size(0)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+
+                loss_sum += loss.item() * feats.size(0)
+                n_samples += feats.size(0)
+        else:
+            # Full forward pass through video + DINO + encoder
+            cache_feats_list = [] if args.cache_features else None
+            cache_labels_list = [] if args.cache_features else None
+
+            for x, y, ds_idx in tqdm(iter_batches(train_loader), total=len(train_loader), desc=f"Probe train epoch {epoch}"):
+                x = x.to(device, non_blocking=True)
+                y = y.to(device, dtype=torch.long, non_blocking=True)
+
+                if args.cache_features:
+                    # Forward through frozen encoder, cache the features before the head
+                    with torch.no_grad():
+                        feats = _extract_features(model, x, ds_idx)
+                    cache_feats_list.append(feats.cpu())
+                    cache_labels_list.append(y.cpu())
+                    # Still train the head this epoch
+                    logits = model.head(feats)
+                else:
+                    logits = model(x, ds_idx)
+
+                loss = F.cross_entropy(logits, y)
+
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+
+                loss_sum += loss.item() * x.size(0)
+                n_samples += x.size(0)
+
+            if args.cache_features and cache_feats_list:
+                train_cache = (torch.cat(cache_feats_list), torch.cat(cache_labels_list))
+                print(f"Cached {train_cache[0].size(0)} train features (shape {train_cache[0].shape})")
+                # Free DINO model after caching — no longer needed
+                if model.dino is not None:
+                    model.dino = None
+                    torch.cuda.empty_cache()
+                    print("Released DINO model from GPU")
 
         train_loss = loss_sum / max(n_samples, 1)
 
         # Validation
         model.eval()
         correct, total = 0, 0
-        with torch.no_grad():
-            for x, y, ds_idx in tqdm(iter_batches(val_loader), total=len(val_loader), desc=f"Probe val epoch {epoch}"):
-                x = x.to(device, non_blocking=True)
-                y = y.to(device, dtype=torch.long, non_blocking=True)
-                logits = model(x, ds_idx)
+
+        if val_cache is not None:
+            cached_feats, cached_labels = val_cache
+            for i in range(0, cached_feats.size(0), args.batch_size):
+                feats = cached_feats[i : i + args.batch_size].to(device, non_blocking=True)
+                y = cached_labels[i : i + args.batch_size].to(device, non_blocking=True)
+                logits = model.head(feats)
                 correct += (logits.argmax(1) == y).sum().item()
                 total += y.size(0)
+        else:
+            cache_feats_list = [] if args.cache_features else None
+            cache_labels_list = [] if args.cache_features else None
+
+            with torch.no_grad():
+                for x, y, ds_idx in tqdm(iter_batches(val_loader), total=len(val_loader), desc=f"Probe val epoch {epoch}"):
+                    x = x.to(device, non_blocking=True)
+                    y = y.to(device, dtype=torch.long, non_blocking=True)
+
+                    if args.cache_features:
+                        feats = _extract_features(model, x, ds_idx)
+                        cache_feats_list.append(feats.cpu())
+                        cache_labels_list.append(y.cpu())
+                        logits = model.head(feats)
+                    else:
+                        logits = model(x, ds_idx)
+
+                    correct += (logits.argmax(1) == y).sum().item()
+                    total += y.size(0)
+
+            if args.cache_features and cache_feats_list:
+                val_cache = (torch.cat(cache_feats_list), torch.cat(cache_labels_list))
+                print(f"Cached {val_cache[0].size(0)} val features")
 
         acc = correct / max(total, 1)
         best_acc = max(best_acc, acc)
         print(f"Epoch {epoch}: train_loss={train_loss:.4f}  val_acc={acc:.4f}  best={best_acc:.4f}")
+
+    # Clean up cached features
+    if train_cache is not None or val_cache is not None:
+        del train_cache, val_cache
+        torch.cuda.empty_cache()
+        print("Deleted cached features")
 
     # Save results
     os.makedirs(args.output_dir, exist_ok=True)
@@ -446,6 +559,8 @@ def parse_args():
     p.add_argument("--frames_per_clip", type=int, default=8)
     p.add_argument("--crop_size", type=int, default=224)
     p.add_argument("--baseline", action="store_true", help="Use DINO mean-pool baseline instead of RNN")
+    p.add_argument("--no_aug", action="store_true", help="Use eval transforms (no augmentation) for training too")
+    p.add_argument("--cache_features", action="store_true", help="Cache encoder features on first epoch, train on cached features for remaining epochs")
 
     # Training (probe mode)
     p.add_argument("--epochs", type=int, default=20)
