@@ -69,7 +69,8 @@ class DinoFrameEncoder(nn.Module):
         
         if self.cache_dino_feats:
             self.id_to_feat = torch.zeros(168913, 8, 384) # train:168913, val: 24777
-        if getattr(args, "val_dataset_len", None) is not None:
+        self.use_patch_tokens = getattr(args, "use_patch_tokens", False)
+        if getattr(args, "val_dataset_len", None) is not None and not self.use_patch_tokens:
             self.update_gates = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.update_norms = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.r_novelty = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)

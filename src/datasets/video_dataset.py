@@ -161,7 +161,10 @@ class VideoDataset(torch.utils.data.Dataset):
         self.uniform_sampling = uniform_sampling
         self.load_cache_feats = load_cache_feats
         if self.load_cache_feats:
-            self.index_to_feat = torch.load(os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1], f"{data_paths.split('/')[-1].split('.')[-0]}.pt"))
+            split_name = data_paths.split('/')[-1].split('.')[0]
+            suffix = "_patches" if getattr(args, "use_patch_tokens", False) else ""
+            feat_path = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1], f"{split_name}{suffix}.pt")
+            self.index_to_feat = torch.load(feat_path, mmap=True)
         if sum([v is not None for v in (fps, duration, frame_step)]) != 1:
             raise ValueError(f"Must specify exactly one of either {fps=}, {duration=}, or {frame_step=}.")
 

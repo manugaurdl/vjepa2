@@ -103,7 +103,7 @@ def run_validation(
         clips = batch.clips
         ds_index = batch.ds_index
         x = clips[0] if isinstance(clips, (list, tuple)) else clips
-        x = x.to(device, non_blocking=True)
+        x = x.to(device, dtype=torch.float32, non_blocking=True)
         y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
         logits = model(x, ds_index)
         if model.cache_dino_feats:
@@ -142,48 +142,46 @@ def run_validation(
         mean_total_loss = ((ce_loss_sum + pred_loss_sum * pred_loss_weight) / total.clamp_min(1.0)).item()
     else:
         mean_total_loss = (pred_loss_sum / total.clamp_min(1.0)).item()
-    gate_means = model.update_gates.mean(0).tolist()
-    update_norms = model.update_norms.mean(0).tolist()
-    pred_error_l2s = getattr(model, "pred_error_l2s", None)
-    pred_error_l2_mean = pred_error_l2s.mean(0).tolist()[1:] if pred_error_l2s is not None else None
-    hidden_states = model.hidden_states
-    r_novelty = model.r_novelty.mean(0).tolist()[1:] #skip first timestep
-    memory_l2_shift, cos_sim, h_t_norm = compute_relative_state_shift(hidden_states)
-    memory_l2_shift = memory_l2_shift.mean(0).tolist() #skip first shift (not computatble)
-    cos_sim = cos_sim.mean(0).tolist() #skip first shift (not computatble)
-    h_t_norm = h_t_norm.mean(0).tolist()  # skip t=0, not useful
-    if is_master and wandb.run:
+    dynamics_logs = {}
+    if hasattr(model, "collect_update_gates"):
+        gate_means = model.update_gates.mean(0).tolist()
+        update_norms = model.update_norms.mean(0).tolist()
+        pred_error_l2s = getattr(model, "pred_error_l2s", None)
+        pred_error_l2_mean = pred_error_l2s.mean(0).tolist()[1:] if pred_error_l2s is not None else None
+        hidden_states = model.hidden_states
+        r_novelty = model.r_novelty.mean(0).tolist()[1:] #skip first timestep
+        memory_l2_shift, cos_sim, h_t_norm = compute_relative_state_shift(hidden_states)
+        memory_l2_shift = memory_l2_shift.mean(0).tolist()
+        cos_sim = cos_sim.mean(0).tolist()
+        h_t_norm = h_t_norm.mean(0).tolist()
+
         def create_plotly_figure(data, title, y_label, x_label):
-            data = [{x_label: t, y_label: g} for t, g in enumerate(data)] # dataframe like list
-            fig = px.line(data, x=x_label, y=y_label, title=title) #plotly line plot
+            data = [{x_label: t, y_label: g} for t, g in enumerate(data)]
+            fig = px.line(data, x=x_label, y=y_label, title=title)
             return fig
-        
+
         suffix = "{precision weighting}" if args.encoder.rnn.update_type == "surprise" else ""
-        fig_update_gate = create_plotly_figure(gate_means, f"Update Gate over Time {suffix}", "gate", "timestep")
-        fig_update_norm = create_plotly_figure(update_norms, "Update Norm over Time", "update_norm", "timestep")
-        fig_pred_error_l2 = None
+        dynamics_logs = {
+            "eval/r_novelty": create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1"),
+            "eval/update_gate": create_plotly_figure(gate_means, f"Update Gate over Time {suffix}", "gate", "timestep"),
+            "eval/update_norm": create_plotly_figure(update_norms, "Update Norm over Time", "update_norm", "timestep"),
+            "eval/memory_l2": create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift(h_t,h_{t-1})", "timestep+1"),
+            "eval/cos_sim": create_plotly_figure(cos_sim, "Memory direction similarity over Time", "cos_sim(h_t,h_{t-1})", "timestep+1"),
+            "eval/h_t_norm": create_plotly_figure(h_t_norm, "Memory norm over Time", "h_t_norm", "timestep+1"),
+        }
         if pred_error_l2_mean is not None:
-            fig_pred_error_l2 = create_plotly_figure(
+            dynamics_logs["eval/pred_error_l2"] = create_plotly_figure(
                 pred_error_l2_mean, f"Prediction Error L2 over Time {suffix}", "pred_error_l2", "timestep"
             )
-        fig_r_novelty = create_plotly_figure(r_novelty, "Novelty Ratio over Time", "(u_novelty/u_total)", "timestep+1")
-        fig_memory_l2 = create_plotly_figure(memory_l2_shift, "Memory L2 Shift over Time", "l2_shift(h_t,h_{t-1})", "timestep+1")
-        fig_cos_sim = create_plotly_figure(cos_sim, "Memory direction similarity over Time", "cos_sim(h_t,h_{t-1})", "timestep+1")
-        fig_h_t_norm = create_plotly_figure(h_t_norm, "Memory norm over Time", "h_t_norm", "timestep+1")
 
+    if is_master and wandb.run:
         wandb.log({
             "eval/loss": mean_total_loss,
             "eval/total_loss": mean_total_loss,
             "eval/ce_loss": mean_ce_loss,
             "eval/pred_loss": mean_pred_loss,
             "eval/acc": acc,
-            "eval/r_novelty": fig_r_novelty,
-            "eval/update_gate": fig_update_gate,
-            "eval/update_norm": fig_update_norm,
-            "eval/memory_l2": fig_memory_l2,
-            "eval/cos_sim": fig_cos_sim,
-            "eval/h_t_norm": fig_h_t_norm,
-            **({"eval/pred_error_l2": fig_pred_error_l2} if fig_pred_error_l2 is not None else {}),
+            **dynamics_logs,
         }, step=int(global_vars["global_step"]))
     
     if hasattr(model, "collect_update_gates"):
@@ -255,7 +253,7 @@ def main(args) -> None:
             clips = batch.clips
             ds_index = batch.ds_index
             x = clips[0] if isinstance(clips, (list, tuple)) else clips
-            x = x.to(device, non_blocking=True)
+            x = x.to(device, dtype=torch.float32, non_blocking=True)
             y = batch.labels.to(device=device, dtype=torch.long, non_blocking=True)
             logits = model(x, ds_index)
             if model.cache_dino_feats:
