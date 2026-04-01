@@ -45,8 +45,10 @@ from root.ddp import _wrap_ddp, _ddp_mean, _is_distributed
 from src.datasets.video_dataset import make_videodataset
 from src.utils.distributed import init_distributed
 from src.utils.logging import AverageMeter, get_logger
+from eval_transfer import SimpleVideoDataset, iter_batches as ood_iter_batches
 import wandb
 import plotly.express as px
+import plotly.graph_objects as go
 
 logger = get_logger(__name__, force=True)
 
@@ -55,20 +57,7 @@ global_vars = {
     "global_step": 0,
 }
 
-def compute_relative_state_shift(hidden_states, epsilon=1e-8):
-    """
-    arg: hidden_states: (N, T, D)
-    returns: relative_shift: (N, T-1, 1); l2(H_t - H_{t-1})/l2(H_{t-1})
-    """
-    h_t = hidden_states[:, 1:, :]
-    h_prev = hidden_states[:, :-1, :]
-    cos_sim = F.cosine_similarity(h_t, h_prev, dim=-1, eps=epsilon)
-    delta = h_t - h_prev
-    delta_norm = torch.norm(delta, p=2, dim=-1)
-    prev_norm = torch.norm(h_prev, p=2, dim=-1)
-    h_t_norm = torch.norm(h_t, p=2, dim=-1)
-    relative_shift = delta_norm / (prev_norm + epsilon)
-    return relative_shift, cos_sim, h_t_norm
+from root.utils import compute_relative_state_shift
 
 
 def _get_pred_error_l2(model: torch.nn.Module):
@@ -77,6 +66,34 @@ def _get_pred_error_l2(model: torch.nn.Module):
         pred_error_l2 = getattr(model.module, "pred_error_l2", None)
     return pred_error_l2
 
+
+
+@torch.no_grad()
+def run_ood_eval(model, ood_loader, device, ssv2_pred_error_l2, is_master):
+    """Collect per-timestep pred_error_l2 on OOD data and log comparison to wandb."""
+    model.eval()
+    ood_errors = []
+    for x, y, ds_idx in tqdm(ood_iter_batches(ood_loader), total=len(ood_loader), desc="OOD eval"):
+        x = x.to(device, dtype=torch.float32, non_blocking=True)
+        _ = model(x, ds_idx)
+        pred_error_l2 = _get_pred_error_l2(model)
+        if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
+            ood_errors.append(pred_error_l2[:, 1:].mean(dim=-1).mean(dim=0).cpu())  # (T-1,)
+    if not ood_errors or ssv2_pred_error_l2 is None:
+        return
+    ood_mean = torch.stack(ood_errors).mean(0).tolist()
+    if is_master and wandb.run:
+        timesteps = list(range(1, len(ssv2_pred_error_l2) + 1))
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=timesteps, y=ssv2_pred_error_l2, mode="lines+markers", name="SSv2"))
+        fig.add_trace(go.Scatter(x=timesteps, y=ood_mean, mode="lines+markers", name="OOD"))
+        fig.update_layout(title="Pred Error L2: SSv2 vs OOD", xaxis_title="timestep", yaxis_title="pred_error_l2")
+        ssv2_m = sum(ssv2_pred_error_l2) / len(ssv2_pred_error_l2)
+        ood_m = sum(ood_mean) / len(ood_mean)
+        wandb.log({
+            "eval_ood/pred_error_l2": fig,
+            "eval_ood/pred_error_ratio": ood_m / max(ssv2_m, 1e-8),
+        }, step=int(global_vars["global_step"]))
 
 
 @torch.no_grad()
@@ -184,10 +201,15 @@ def run_validation(
             **dynamics_logs,
         }, step=int(global_vars["global_step"]))
     
+    # Extract SSv2 pred_error_l2 for OOD comparison
+    ssv2_pred_error_l2 = None
     if hasattr(model, "collect_update_gates"):
+        pe = getattr(model, "pred_error_l2s", None)
+        if pe is not None:
+            ssv2_pred_error_l2 = pe.mean(0).tolist()[1:]
         model.collect_update_gates = False
     model.train()
-    return mean_total_loss, acc
+    return mean_total_loss, acc, ssv2_pred_error_l2
 
 def main(args) -> None:
     # torchrun compatibility: prefer env vars if available, but still call repo helper.
@@ -218,6 +240,17 @@ def main(args) -> None:
     train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master)
     args.val_dataset_len = len(val_ds)
 
+    # --- OOD eval loader (optional)
+    ood_loader = None
+    ood_eval_csv = getattr(args, "ood_eval_csv", None)
+    if ood_eval_csv is not None:
+        ood_ds = SimpleVideoDataset(ood_eval_csv, frames_per_clip=args.eval_frames_per_clip, transform=eval_transform)
+        ood_loader = torch.utils.data.DataLoader(
+            ood_ds, batch_size=(args.val_batch_size or args.batch_size),
+            shuffle=False, num_workers=args.num_workers, pin_memory=True, drop_last=False,
+        )
+        print(f"OOD eval: {len(ood_ds)} videos from {ood_eval_csv}")
+
     # --- model / opt
     model = _build_model(args, device)
     model = _wrap_ddp(model, device, world_size)
@@ -232,8 +265,9 @@ def main(args) -> None:
     
     if args.init_eval:
         print("|RUNNING INITIAL VALIDATION...")
-        _vloss, global_vars["best_acc"] = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
-        ###acc should be maintained. it will be used to save checkpoint if it is better than the previous one.
+        _vloss, global_vars["best_acc"], ssv2_pe = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
+        if ood_loader is not None:
+            run_ood_eval(model, ood_loader, device, ssv2_pe, is_master)
 
     for epoch in range(args.epochs):
         if train_sampler is not None and hasattr(train_sampler, "set_epoch"):
@@ -308,7 +342,9 @@ def main(args) -> None:
                 }, step=global_vars["global_step"])
 
             if (global_vars["global_step"]+1) % args.val_freq == 0:
-                _vloss, acc = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
+                _vloss, acc, ssv2_pe = run_validation(model, val_loader, device, world_size, epoch=epoch, step=global_step, is_master=is_master)
+                if ood_loader is not None:
+                    run_ood_eval(model, ood_loader, device, ssv2_pe, is_master)
                 model_state = model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict()
                 if acc > global_vars["best_acc"]:
                     global_vars["best_acc"] = acc

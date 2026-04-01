@@ -119,6 +119,23 @@ def dict_to_namespace(data):
         return data
 
 
+def compute_relative_state_shift(hidden_states, epsilon=1e-8):
+    """
+    arg: hidden_states: (N, T, D)
+    returns: relative_shift: (N, T-1, 1); l2(H_t - H_{t-1})/l2(H_{t-1})
+    """
+    import torch.nn.functional as F
+    h_t = hidden_states[:, 1:, :]
+    h_prev = hidden_states[:, :-1, :]
+    cos_sim = F.cosine_similarity(h_t, h_prev, dim=-1, eps=epsilon)
+    delta = h_t - h_prev
+    delta_norm = torch.norm(delta, p=2, dim=-1)
+    prev_norm = torch.norm(h_prev, p=2, dim=-1)
+    h_t_norm = torch.norm(h_t, p=2, dim=-1)
+    relative_shift = delta_norm / (prev_norm + epsilon)
+    return relative_shift, cos_sim, h_t_norm
+
+
 def compute_novelty_ratio(update, state):
     # 1. Dot product along the feature dimension (B, S, 1)
     dot_prod = torch.sum(update * state, dim=-1, keepdim=True)

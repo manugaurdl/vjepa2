@@ -51,8 +51,7 @@ from tqdm import tqdm
 
 from app.vjepa.transforms import make_transforms
 from root.models.model import DinoFrameEncoder, _build_model
-from root.utils import dict_to_namespace, set_seed
-from train import compute_relative_state_shift
+from root.utils import dict_to_namespace, set_seed, compute_relative_state_shift
 
 # ---------------------------------------------------------------------------
 # SimpleVideoDataset — bypasses the SSv2-hardcoded VideoDataset

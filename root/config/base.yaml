@@ -8,6 +8,7 @@ init_eval: true
 cache_dino_feats: false #save train.pt and validation.pt
 load_cache_feats: false
 use_patch_tokens: false
+ood_eval_csv: null  # path to OOD dataset CSV for prediction decay comparison (e.g. /nas/manu/ucf101/data/test.csv)
 
 # --- Dataset / Sampling ---
 batch_size: 128
