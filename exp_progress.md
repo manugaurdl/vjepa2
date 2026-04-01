@@ -1,5 +1,24 @@
 # Experiment Progress
 
+## What We Care About
+The primary goal is building a good **next-frame predictor** in DINO feature space, then analyzing **memory dynamics** to understand how the RNN accumulates temporal information. Classification accuracy is secondary — useful as a sanity check but not the main objective.
+
+### Key metrics (priority order):
+1. **eval/pred_loss & eval/pred_error_l2**: Is the model learning to predict next frames? Per-timestep plot reveals if prediction improves or collapses.
+2. **eval/h_t_norm**: Should increase over time as novel info accumulates (e.g., 15→17 over 8 frames). Flat = state not accumulating = likely collapse.
+3. **eval/update_norm**: Healthy: large at t=0, drops at t=1, then slightly increases as novel info appears. Drops to ~0 after t=0 = trivial solution.
+4. **eval/cos_sim**: Direction similarity between consecutive hidden states. Should show meaningful variation. Flat = state direction frozen.
+5. **eval/r_novelty**: Ratio of novel info in updates. Should be non-trivial across timesteps.
+6. **eval/memory_l2**: L2 shift between consecutive states. Non-zero = meaningful temporal dynamics.
+7. **eval/acc**: Only relevant when action_classification=True.
+
+### Collapse detection checklist:
+- pred_loss drops to near-zero suspiciously fast
+- h_t_norm flat across timesteps
+- update_norm → 0 after t=0
+- cos_sim flat
+- All together = representation collapse. Root cause: if prediction target is in a learned space (W_enc @ dino_feat), the encoder can collapse to make prediction trivial. Fix: predict in frozen DINO space (predict_in_dino_space=True).
+
 ## Eval Metrics Reference
 - **eval/acc**: top-1 classification accuracy on SSv2 validation set (only meaningful when action_classification=True)
 - **eval/ce_loss**: cross-entropy loss on validation set

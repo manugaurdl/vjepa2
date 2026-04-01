@@ -130,12 +130,13 @@ class CrossAttentionTransformer(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, in_features, out_features):
+    def __init__(self, in_features, out_features, hidden_dim=None):
         super().__init__()
-        self.fc1 = nn.Linear(in_features, out_features)
-        self.fc2 = nn.Linear(out_features, out_features)
+        hidden_dim = hidden_dim or out_features
+        self.fc1 = nn.Linear(in_features, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, out_features)
         self.relu = nn.ReLU()
-        
+
     def forward(self, x):
         x = self.relu(self.fc1(x))
         x = self.fc2(x)
@@ -146,9 +147,10 @@ class GatedTransformerCore(nn.Module):
     GRU-like gating around a cross-attention transformer.
     Inputs and state are sequences of tokens: (B, S, D).
     """
-    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False, predict_in_dino_space: bool = False):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False, predict_in_dino_space: bool = False, pred_hidden_dim: int = None):
         super().__init__()
         mlp_dim = (4 * dim) if mlp_dim is None else mlp_dim
+        pred_hidden_dim = pred_hidden_dim or dim
 
         self.decay_state = decay_state # default = False i.e state not decayed
         self.update_type = update_type
@@ -161,7 +163,7 @@ class GatedTransformerCore(nn.Module):
             self.state_reset = nn.Linear(dim, dim, bias=False)
         elif self.update_type == "surprise":
             self.w_precision = nn.Linear(dim, dim, bias=False)
-            self.w_pred = MLP(dim, dim)
+            self.w_pred = MLP(dim, dim, hidden_dim=pred_hidden_dim)
             self.encoder = nn.Identity() if predict_in_dino_space else nn.Linear(dim, dim, bias=False)
 
         # self.transformer = CrossAttentionTransformer(
@@ -230,10 +232,10 @@ class VideoRNNTransformerEncoder(nn.Module):
         else last_output: (B, D) or (B, S, D)
       - final_state: (B, 1, D) or (B, S, D)
     """
-    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True, predict_in_dino_space: bool = False):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True, predict_in_dino_space: bool = False, pred_hidden_dim: int = None):
         super().__init__()
         self.core = GatedTransformerCore(
-            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state, predict_in_dino_space=predict_in_dino_space
+            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state, predict_in_dino_space=predict_in_dino_space, pred_hidden_dim=pred_hidden_dim
         )
 
     def forward(self, x, state=None, return_all: bool = True):

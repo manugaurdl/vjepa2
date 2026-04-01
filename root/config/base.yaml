@@ -54,6 +54,7 @@ encoder:
     update_type: "surprise" # ["gru", "surprise"]
     pred_loss_weight: 0.01
     predict_in_dino_space: false
+    pred_hidden_dim: 384
 pooling: "mean" # ["mean", "concat"]
 num_classes: 174
 next_frame_pred: true
