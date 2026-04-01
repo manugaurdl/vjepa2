@@ -282,7 +282,10 @@ def main(args) -> None:
 
             # Logging ###???????
             ce_loss_reduced = _ddp_mean(ce_loss.detach()).item()
-            pred_loss_reduced = _ddp_mean((pred_loss * pred_loss_weight).detach()).item()
+            if getattr(args, "action_classification", True):
+                pred_loss_reduced = _ddp_mean((pred_loss * pred_loss_weight).detach()).item()
+            else:
+                pred_loss_reduced = _ddp_mean(pred_loss.detach()).item()
             total_loss_reduced = _ddp_mean(total_loss.detach() * max(args.grad_accum, 1)).item()
             loss_meter.update(total_loss_reduced, n=x.size(0))
             ce_loss_meter.update(ce_loss_reduced, n=x.size(0))
