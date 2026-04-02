@@ -141,7 +141,7 @@ def load_model_from_checkpoint(ckpt_path, device, override_num_classes=None):
 
     Returns (model, saved_args).
     """
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     saved_args = dict_to_namespace(ckpt["args"])
 
     # Override fields that don't apply at eval time
@@ -159,18 +159,18 @@ def load_model_from_checkpoint(ckpt_path, device, override_num_classes=None):
     return model, saved_args
 
 
-def build_baseline_model(device):
-    """Build a DINO mean-pool baseline (no RNN, just frozen DINO + linear head)."""
+def build_baseline_model(device, pooling="mean", frames_per_clip=8):
+    """Build a DINO baseline (no RNN, just frozen DINO + linear head)."""
     baseline_args = dict_to_namespace({
         "encoder": {"type": "linear"},
-        "pooling": "mean",
+        "pooling": pooling,
         "num_classes": 1,  # placeholder, head gets replaced anyway
         "dino_repo": "facebookresearch/dinov2",
         "dino_model": "dinov2_vits14",
         "dino_pretrained": True,
         "freeze_dino": True,
-        "frames_per_clip": 8,
-        "eval_frames_per_clip": 8,
+        "frames_per_clip": frames_per_clip,
+        "eval_frames_per_clip": frames_per_clip,
         "cache_dino_feats": False,
         "load_cache_feats": False,
         "val_dataset_len": None,
@@ -243,9 +243,10 @@ def run_probe(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Build model
-    if args.baseline:
-        print("=== DINO mean-pool baseline ===")
-        model = build_baseline_model(device)
+    if args.baseline or args.concat:
+        pooling = "concat" if args.concat else "mean"
+        print(f"=== DINO {pooling} baseline ===")
+        model = build_baseline_model(device, pooling=pooling, frames_per_clip=args.frames_per_clip)
     else:
         print("=== RNN transfer probe ===")
         model, _ = load_model_from_checkpoint(args.checkpoint, device)
@@ -257,6 +258,8 @@ def run_probe(args):
     # Replace classification head
     if model.encoder_type == "rnn":
         head_dim = model.head.in_features if model.head is not None else 384
+    elif model.pooling == "concat":
+        head_dim = 384 * args.frames_per_clip
     else:
         head_dim = 384  # DINO vits14 dim
     model.head = nn.Linear(head_dim, args.num_classes).to(device)
@@ -349,7 +352,19 @@ def run_probe(args):
             if args.cache_features and cache_feats_list:
                 train_cache = (torch.cat(cache_feats_list), torch.cat(cache_labels_list))
                 print(f"Cached {train_cache[0].size(0)} train features (shape {train_cache[0].shape})")
-                # Free DINO model after caching — no longer needed
+
+                # Also cache val features before freeing DINO
+                val_feats_list, val_labels_list = [], []
+                with torch.no_grad():
+                    for x, y, ds_idx in tqdm(iter_batches(val_loader), total=len(val_loader), desc="Caching val features"):
+                        x = x.to(device, non_blocking=True)
+                        y = y.to(device, dtype=torch.long, non_blocking=True)
+                        feats = _extract_features(model, x, ds_idx)
+                        val_feats_list.append(feats.cpu())
+                        val_labels_list.append(y.cpu())
+                val_cache = (torch.cat(val_feats_list), torch.cat(val_labels_list))
+                print(f"Cached {val_cache[0].size(0)} val features")
+
                 if model.dino is not None:
                     model.dino = None
                     torch.cuda.empty_cache()
@@ -370,28 +385,13 @@ def run_probe(args):
                 correct += (logits.argmax(1) == y).sum().item()
                 total += y.size(0)
         else:
-            cache_feats_list = [] if args.cache_features else None
-            cache_labels_list = [] if args.cache_features else None
-
             with torch.no_grad():
                 for x, y, ds_idx in tqdm(iter_batches(val_loader), total=len(val_loader), desc=f"Probe val epoch {epoch}"):
                     x = x.to(device, non_blocking=True)
                     y = y.to(device, dtype=torch.long, non_blocking=True)
-
-                    if args.cache_features:
-                        feats = _extract_features(model, x, ds_idx)
-                        cache_feats_list.append(feats.cpu())
-                        cache_labels_list.append(y.cpu())
-                        logits = model.head(feats)
-                    else:
-                        logits = model(x, ds_idx)
-
+                    logits = model(x, ds_idx)
                     correct += (logits.argmax(1) == y).sum().item()
                     total += y.size(0)
-
-            if args.cache_features and cache_feats_list:
-                val_cache = (torch.cat(cache_feats_list), torch.cat(cache_labels_list))
-                print(f"Cached {val_cache[0].size(0)} val features")
 
         acc = correct / max(total, 1)
         best_acc = max(best_acc, acc)
@@ -406,7 +406,7 @@ def run_probe(args):
     # Save results
     os.makedirs(args.output_dir, exist_ok=True)
     result = {
-        "mode": "baseline" if args.baseline else "rnn",
+        "mode": "concat" if args.concat else ("baseline" if args.baseline else "rnn"),
         "dataset_csv": args.data_csv,
         "num_classes": args.num_classes,
         "epochs": args.epochs,
@@ -581,6 +581,7 @@ def parse_args():
     p.add_argument("--frames_per_clip", type=int, default=8)
     p.add_argument("--crop_size", type=int, default=224)
     p.add_argument("--baseline", action="store_true", help="Use DINO mean-pool baseline instead of RNN")
+    p.add_argument("--concat", action="store_true", help="Use DINO concat baseline (concatenate per-frame features)")
     p.add_argument("--no_aug", action="store_true", help="Use eval transforms (no augmentation) for training too")
     p.add_argument("--cache_features", action="store_true", help="Cache encoder features on first epoch, train on cached features for remaining epochs")
 

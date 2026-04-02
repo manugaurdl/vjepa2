@@ -42,9 +42,18 @@ The primary goal is building a good **next-frame predictor** in DINO feature spa
 ## Experiments
 
 ### 1. update=w(error)_L2weight1e-1
-- **Config**: action_classification=True, next_frame_pred=True, pred_loss_weight=0.1, update_type=surprise, epochs=100
+- **Config**: action_classification=True, next_frame_pred=True, pred_loss_weight=0.1, update_type=surprise, epochs=100, load_cache_feats=True
+- **Checkpoint**: `/nas/manu/vjepa2/outputs/update=w(error)_L2weight1e-1_zyvsy8gk/best.pt`
 - **Goal**: train RNN with both CE and next-frame prediction loss
-- **Result**: (pending / fill in)
+- **UCF101 Transfer Probe Results** (20 epochs, linear head, frozen encoder, no augmentation):
+
+| Model | UCF101 Accuracy |
+|-------|----------------|
+| DINO mean-pool (baseline) | **88.0%** |
+| DINO concat 8×384 (baseline) | **86.0%** |
+| RNN state 384-dim (frozen) | **84.0%** |
+
+- **Interpretation**: RNN state trails both DINO baselines by 2-4 points. The recurrent processing is losing general visual information rather than adding useful temporal structure for transfer. State is overfit to SSv2 action patterns.
 
 ### 2. next_frame_pred_only
 - **Config**: action_classification=False, next_frame_pred=True, no pred_loss_weight scaling, epochs=100

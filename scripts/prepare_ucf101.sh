@@ -11,7 +11,7 @@ cd "$TARGET_DIR"
 # Download videos (~7GB)
 if [ ! -d "UCF-101" ]; then
     echo "Downloading UCF101 videos..."
-    wget -q --show-progress https://www.crcv.ucf.edu/data/UCF101/UCF101.rar -O UCF101.rar
+    wget --no-check-certificate -q --show-progress https://www.crcv.ucf.edu/data/UCF101/UCF101.rar -O UCF101.rar
     echo "Extracting..."
     unrar x -o+ UCF101.rar
     rm UCF101.rar
@@ -22,7 +22,7 @@ fi
 # Download train/test split files
 if [ ! -d "ucfTrainTestlist" ]; then
     echo "Downloading train/test splits..."
-    wget -q --show-progress https://www.crcv.ucf.edu/data/UCF101/UCF101TrainTestSplits-RecognitionTask.zip -O splits.zip
+    wget --no-check-certificate -q --show-progress https://www.crcv.ucf.edu/data/UCF101/UCF101TrainTestSplits-RecognitionTask.zip -O splits.zip
     unzip -o splits.zip
     rm splits.zip
 else
