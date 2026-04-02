@@ -39,6 +39,7 @@ The primary goal is building a good **next-frame predictor** in DINO feature spa
 - **trainer/lr**: current learning rate
 - **trainer/iter_ms_avg**: average iteration time in ms
 
+
 ## Experiments
 
 ### 1. update=w(error)_L2weight1e-1
