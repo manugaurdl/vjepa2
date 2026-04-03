@@ -48,11 +48,14 @@ class DinoFrameEncoder(nn.Module):
         self.encoder_type = args.encoder.type
         self.cache_dino_feats = args.cache_dino_feats
         
+        # Pass frame/patch info for causal_transformer
+        args.encoder._n_frames = args.frames_per_clip
+        args.encoder._n_patches = 256 if getattr(args, "use_patch_tokens", False) else 1
         self.encoder, encoder_out_dim = build_encoder(args.encoder, input_dim=dino_dim)
         if encoder_out_dim is None:
             encoder_out_dim = dino_dim
-        if self.encoder_type == "rnn":
-            head_in_dim = args.encoder.rnn.hidden_dim
+        if self.encoder_type in ("rnn", "causal_transformer"):
+            head_in_dim = dino_dim
         else:
             if self.pooling == "concat":
                 head_in_dim = encoder_out_dim * args.frames_per_clip
@@ -70,7 +73,7 @@ class DinoFrameEncoder(nn.Module):
         if self.cache_dino_feats:
             self.id_to_feat = torch.zeros(168913, 8, 384) # train:168913, val: 24777
         self.use_patch_tokens = getattr(args, "use_patch_tokens", False)
-        if getattr(args, "val_dataset_len", None) is not None and not self.use_patch_tokens:
+        if getattr(args, "val_dataset_len", None) is not None and not self.use_patch_tokens and self.encoder_type == "rnn":
             self.update_gates = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.update_norms = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
             self.r_novelty = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)
@@ -109,7 +112,7 @@ class DinoFrameEncoder(nn.Module):
 
         frame_feats = self.encoder(frame_feats)  # (B, T, M)
 
-        if self.encoder_type == "rnn":
+        if self.encoder_type in ("rnn", "causal_transformer"):
             
             hidden_states, final_state, timesteps_update_gate, timesteps_update_norm, timesteps_r_novelty, pred_error_l2 = frame_feats ### hidden_states[:,-1] == final_state
             self.pred_error_l2 = pred_error_l2
@@ -122,7 +125,8 @@ class DinoFrameEncoder(nn.Module):
                 if pred_error_l2 is not None:
                     self.pred_error_l2s[ds_index] = pred_error_l2.mean(dim=-1).detach().cpu()
             if self.head is not None:
-                return self.head(final_state)
+                cls_state = final_state.mean(dim=-2) if final_state.ndim == 3 else final_state
+                return self.head(cls_state)
             return final_state
         else:
             self.pred_error_l2 = None

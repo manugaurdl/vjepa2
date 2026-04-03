@@ -5,6 +5,7 @@ from typing import Any, Tuple
 import torch
 import torch.nn as nn
 from root.models.rnn import VideoRNNTransformerEncoder
+from root.models.causal_transformer import CausalTransformerPredictor
 
 class Transformer(nn.Module):
     """
@@ -80,4 +81,10 @@ def build_encoder(encoder_cfg: Any, *, input_dim: int) -> Tuple[nn.Module, int]:
         rnn_cfg = encoder_cfg.rnn
         encoder = VideoRNNTransformerEncoder(dim=rnn_cfg.hidden_dim, update_type=rnn_cfg.update_type, num_layers=rnn_cfg.depth, num_heads=8, mlp_dim=4*rnn_cfg.hidden_dim, cross_attn_dim=rnn_cfg.cross_attn_dim, decay_state=rnn_cfg.decay_state, predict_in_dino_space=getattr(rnn_cfg, "predict_in_dino_space", False), pred_hidden_dim=getattr(rnn_cfg, "pred_hidden_dim", None))
         out_dim = rnn_cfg.hidden_dim
+    elif enc_type == "causal_transformer":
+        ct_cfg = encoder_cfg.causal_transformer
+        n_patches = getattr(encoder_cfg, "_n_patches", 1)
+        n_frames = getattr(encoder_cfg, "_n_frames", 8)
+        encoder = CausalTransformerPredictor(dim=input_dim, n_frames=n_frames, n_patches=n_patches, depth=ct_cfg.depth, n_heads=ct_cfg.n_heads)
+        out_dim = input_dim
     return encoder, out_dim

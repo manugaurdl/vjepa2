@@ -9,8 +9,6 @@ next frame *in dino space* (z) — `2ldiw9xk`
 
 next frame PATCH TOKENS *in dino space* (z) — `e6esmgmu`
 
-
-
 ## Stage 1: Where We Are
 
 - Proxy task: SSv2, 8 uniformly sampled frames, frozen DINO (vits14, 384-dim)
@@ -72,11 +70,12 @@ All baselines computed on SSv2 val, skipping t=0 prediction (first frame predict
 
 - **Predict global mean**: predict the average DINO feature across all videos/frames. Dumbest predictor.
 - **Predict local mean**: predict the average DINO feature of the current video. Stronger — captures per-video appearance.
-- **Copy current frame**: predict the previous frame as the next. Exploits frame-to-frame smoothness.
+- **Copy current frame**: predict the previous frame as the next. Exploits frame-to-frame smoothness. (L2 = X_t - X_{t-1})
 
 Note: validation.pt has 168913 rows but only first 24777 are real val data (rest are zero-padded from old caching code). All baselines below computed on the correct 24777 val samples, skipping t=0.
 
 ### CLS token (S=1, D=384)
+
 
 | Baseline               | L2      |
 | ---------------------- | ------- |
@@ -85,9 +84,11 @@ Note: validation.pt has 168913 rows but only first 24777 are real val data (rest
 | Predict local mean     | 429     |
 | **Model (100 epochs)** | **513** |
 
+
 Model is 16% better than copy baseline but worse than local mean (429).
 
 ### Patch tokens (S=256, D=384)
+
 
 | Baseline               | L2      |
 | ---------------------- | ------- |
@@ -96,15 +97,14 @@ Model is 16% better than copy baseline but worse than local mean (429).
 | Predict local mean     | 683     |
 | **Model (100 epochs)** | **851** |
 
+
 Model is 22% better than copy baseline but worse than local mean (683).
 
 ## How Well Do Models Understand Temporal Dynamics?
 
 Beyond pred_loss, we need diagnostics that separate "learned dynamics" from "learned frame similarity."
 
-> if model overwrites its state, it becomes a last few frame copy-paste model
-
-
+> if model overwrites its state everytime, it becomes a last few frame copy-paste model
 
 **1. Static vs Dynamic patch decomposition** (most direct, patch tokens only)
 
@@ -130,13 +130,17 @@ The copy baseline at horizon k is just: how different is frame t from frame t+k 
 
 **Motivation**: The model beats the copy-current-frame baseline by 17-24%, but is that improvement from learning temporal dynamics or some other shortcut? We test this by shuffling the frame order at eval time. If the model learned dynamics (e.g., trajectory extrapolation), shuffling should break its predictions since temporal coherence is destroyed. If it just learned a slightly better static predictor, shuffling shouldn't matter much.
 
-**Shuffle ratio** = shuffled pred_loss / normal pred_loss. Higher ratio = model relies more on temporal order for its predictions.
+**Ratio** = shuffled pred_loss / normal pred_loss. 
 
-| Model | Normal | Shuffled | Ratio | Copy Baseline |
-|---|---|---|---|---|
-| `zyvsy8gk` (CE + pred, learned space) | 2.23 | 2.29 | **1.03x** | — |
-| `2ldiw9xk` (pred only, CLS, dino space) | 176.9 | 211.9 | **1.20x** | 620 |
-| `e6esmgmu` (pred only, patches, dino space) | 851.5 | 1114.1 | **1.31x** | 1116 |
+Higher ratio = how bad the model is if frames are shuffled
+
+
+| Model                                       | Normal | Shuffled | Ratio     | Copy Baseline |
+| ------------------------------------------- | ------ | -------- | --------- | ------------- |
+| `zyvsy8gk` (CE + pred, learned space)       | 2.23   | 2.29     | **1.03x** | —             |
+| `2ldiw9xk` (pred only, CLS, dino space)     | 176.9  | 211.9    | **1.20x** | 620           |
+| `e6esmgmu` (pred only, patches, dino space) | 851.5  | 1114.1   | **1.31x** | 1116          |
+
 
 - Learned space model: temporal order barely matters (3%) — W_enc subspace doesn't encode real dynamics.
 - CLS dino space: 20% increase — temporal order matters.
@@ -146,15 +150,33 @@ The copy baseline at horizon k is just: how different is frame t from frame t+k 
 
 To check whether the model's shuffle sensitivity comes from learned dynamics or just the task getting harder:
 
-| | Copy Shuffle Ratio | Model Shuffle Ratio |
-|---|---|---|
-| CLS (dino space) | 11.2x | 1.20x |
-| Patches (dino space) | 1.46x | 1.31x |
 
-- **CLS**: copy baseline gets 11x worse under shuffling (random CLS pairs are very different), but the model only gets 1.2x worse — model is robust to shuffling, barely relies on temporal order despite the task getting dramatically harder.
-- **Patches**: copy baseline gets 1.46x worse, model gets 1.31x worse — nearly the same ratio. The model's shuffle sensitivity is almost entirely explained by the task getting harder, not by the model having learned temporal structure.
+|                      | Copy Shuffle Ratio | Model Shuffle Ratio |
+| -------------------- | ------------------ | ------------------- |
+| CLS (dino space)     | 11.2x              | 1.20x               |
+| Patches (dino space) | 1.46x              | 1.31x               |
+| Pixel space          | 1.55x              | --                  |
 
-**Conclusion**: Neither model shows strong evidence of having learned temporal dynamics beyond frame similarity. The patch model's higher shuffle ratio (31% vs 20%) is because the patch prediction task itself is more shuffle-sensitive, not because it learned better dynamics.
+
+**CLS**
+
+- copy baseline gets **11x worse under shuffling** (random CLS pairs are very different), but the model only gets 1.2x worse — model is robust to shuffling, barely relies on temporal order despite the task getting dramatically harder.
+- better for training - captures semantics - which keeps changing even if most tokens static
+  - loses spatial structure (maybe)
+
+**Patches** 
+
+- copy baseline gets 1.46x worse, model gets 1.31x worse — nearly the same ratio. The model's shuffle sensitivity is al0most entirely explained by the task getting harder, not by the model having learned temporal structure.
+  - captures spatial structure (similar to pixel space ~ both get around 1.5x shuffle ratio), but **gradient dilution problem** --> once model learns to capture scene level info early in the training, loss = 0 for static tokens (N_s) , however loss over dynamic tokens (N_d << N_s) still get scaled down by N_s. 
+
+
+
+**Interpreting the gap between copy and model shuffle ratios:**
+
+- DINO CLS space has 11.2x shuffle sensitivity — a useful **upper bound** — it tells you how much temporal signal exists in CLS space that a good predictor could exploit. 
+
+- DINO patches (1.46x) behave like pixels (1.55x) - most pixels static
+- Neither model shows strong temporal dynamics yet. The patch model's higher shuffle ratio (1.31x) tracks its copy baseline (1.46x), not better dynamics learning.
 
 **4. Video reversal test** (weaker than expected)
 

@@ -40,7 +40,7 @@ dino_model: "dinov2_vits14" # "dinov2_vitl14"
 dino_pretrained: true
 freeze_dino: true
 encoder:
-  type: "rnn" #["transformer", "mlp", "linear", "rnn"]
+  type: "rnn" #["transformer", "mlp", "linear", "rnn", "causal_transformer"]
   transformer:
     hidden_dim: 1024
     depth: 4
@@ -57,6 +57,9 @@ encoder:
     pred_loss_weight: 0.01
     predict_in_dino_space: false
     pred_hidden_dim: 384
+  causal_transformer:
+    depth: 4
+    n_heads: 8
 pooling: "mean" # ["mean", "concat"]
 num_classes: 174
 next_frame_pred: true
