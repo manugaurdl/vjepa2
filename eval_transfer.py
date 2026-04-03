@@ -219,14 +219,24 @@ def _extract_features(model, x, ds_idx):
         B, C, T, H, W = x.shape
         frames = x.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
         with torch.no_grad():
-            from root.models.model import _dinov2_frame_features
-            f = _dinov2_frame_features(m.dino, frames)
-        frame_feats = f.reshape(B, T, -1)
+            if getattr(m, "use_patch_tokens", False):
+                # Extract patch tokens (B*T, S, D) for patch models
+                feats = m.dino.forward_features(frames)
+                f = feats["x_norm_patchtokens"]  # (B*T, S, D)
+                S, D = f.shape[1], f.shape[2]
+                frame_feats = f.reshape(B, T, S, D)
+            else:
+                from root.models.model import _dinov2_frame_features
+                f = _dinov2_frame_features(m.dino, frames)
+                frame_feats = f.reshape(B, T, -1)
 
     enc_out = m.encoder(frame_feats)
 
     if m.encoder_type == "rnn":
         hidden_states, final_state, *_ = enc_out
+        # Patch models have final_state (B, S, D) — pool to (B, D)
+        if final_state.ndim == 3:
+            final_state = final_state.mean(dim=-2)
         return final_state
     else:
         if m.pooling == "mean":
