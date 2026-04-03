@@ -80,9 +80,11 @@ class CausalTransformerPredictor(nn.Module):
         # pred_error_l2: pred[t] should predict target[t+1]
         # Shape: (B, T-1) or (B, T-1, S)
         error_l2 = ((preds[:, :-1] - targets[:, 1:]) ** 2).sum(dim=-1)
+        if error_l2.ndim == 2:
+            error_l2 = error_l2.unsqueeze(-1)  # (B, T-1, 1) to match RNN's (B, T, S)
 
-        # Pad with zeros at t=0 to get (B, T) or (B, T, S), matching RNN interface
-        pad_shape = (B, 1, S) if S > 1 else (B, 1)
+        # Pad with zeros at t=0 to get (B, T, S), matching RNN interface
+        pad_shape = (B, 1, error_l2.shape[-1])
         pred_error_l2 = torch.cat([torch.zeros(pad_shape, device=x.device), error_l2], dim=1)
 
         # Final state: last frame's output
