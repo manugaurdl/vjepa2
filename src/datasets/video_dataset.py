@@ -162,7 +162,12 @@ class VideoDataset(torch.utils.data.Dataset):
         self.load_cache_feats = load_cache_feats
         if self.load_cache_feats:
             split_name = data_paths.split('/')[-1].split('.')[0]
-            suffix = "_patches" if getattr(args, "use_patch_tokens", False) else ""
+            if getattr(args, "meanpool_patches", False):
+                suffix = "_meanpool"
+            elif getattr(args, "use_patch_tokens", False):
+                suffix = "_patches"
+            else:
+                suffix = ""
             feat_path = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1], f"{split_name}{suffix}.pt")
             self.index_to_feat = torch.load(feat_path, mmap=True)
         if sum([v is not None for v in (fps, duration, frame_step)]) != 1:

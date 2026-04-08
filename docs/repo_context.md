@@ -28,3 +28,38 @@ PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py --checkpoint /nas/manu/vjep
     --data_csv /nas/manu/ucf101/data/test.csv \
     --num_classes 101 --cache_features --no_aug --output_dir outputs/eval_ucf101_baseline_concat
 ```
+
+## Eval: Temporal Shuffle Test
+
+Tests whether model relies on temporal order. Shuffles frame order at eval time, compares pred_loss.
+
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/temporal_shuffle_test.py \
+    --checkpoint /nas/manu/vjepa2/outputs/<run_name>/best.pt \
+    --data_dir /nas/manu --batch_size 64 --num_shuffles 3 --gpu 0
+```
+
+- Loads cached val features from `/nas/manu/ssv2/dino_feats/vits14/validation{_patches}.pt` based on `use_patch_tokens` in checkpoint config
+- Outputs: normal pred_loss, shuffled pred_loss (avg over seeds), ratio
+- Accesses `model.pred_error_l2` after forward pass (shape `(B, T, S)`, skips t=0)
+
+## Eval: Static vs Dynamic Patch Decomposition
+
+Splits patches into static/dynamic by per-patch motion score, compares model error vs copy baseline per group. Patch models only.
+
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/static_dynamic_decomposition.py \
+    --checkpoint /nas/manu/vjepa2/outputs/<run_name>/best.pt \
+    --data_dir /nas/manu --batch_size 64 --gpu 0
+```
+
+- Copy baseline comparison only valid for DINO-space models (`predict_in_dino_space=True`). For learned-space models, ignore copy baseline column — model error per group is still meaningful.
+- Also computes copy shuffle ratio on dynamic patches only (data-only metric, valid for any model).
+
+## Key model internals
+
+- `pred_error_l2`: stored on `model.pred_error_l2` after forward pass, shape `(B, T, S)` where S=256 for patches, S=1 for CLS. Computed as `(h - w_pred(state))^2.sum(dim=-1)` in `GatedTransformerCore.forward()` (`root/models/rnn.py:198-199`).
+- State update (surprise mode): `error = h - w_pred(state)` → `update = w_precision(error)` → `state = LN(state + update)`
+- `w_pred`: 2-layer MLP (Linear→ReLU→Linear), hidden_dim=384, defined in `root/models/rnn.py`
+- Cached features: `/nas/manu/ssv2/dino_feats/vits14/{validation,validation_patches}.pt`. Patches shape: `(24777, 8, 256, 384)`, CLS shape: `(24777, 8, 384)`.
+- Checkpoints at `/nas/manu/vjepa2/outputs/<run_name>/{best,last}.pt`. Contain `model` state dict and `args` config dict.

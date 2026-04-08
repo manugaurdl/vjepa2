@@ -37,21 +37,34 @@
 
 Freeze everything, train only a linear head on UCF101 (101 classes, 13K videos, 20 epochs, no augmentation, cached features).
 
-| Table 1: Transfer Probe | |
 *Table 1*
 
 
-| Model                                 | UCF101 Acc |
-| ------------------------------------- | ---------- |
-| DINO mean-pool (no temporal modeling) | **88.0%**  |
-| DINO concat (8x384=3072-dim)          | **86.0%**  |
-| RNN state (384-dim, frozen)           | **84.0%**  |
+| Model                                            | UCF101 Acc |
+| ------------------------------------------------ | ---------- |
+| DINO mean-pool (no temporal modeling)            | **88.0%**  |
+| DINO concat (8x384=3072-dim)                     | **86.0%**  |
+| RNN CLS, DINO-space pred (`2ldiw9xk`)            | **85.4%**  |
+| RNN CLS, CE+pred, learned space (`zyvsy8gk`)     | **84.0%**  |
+| RNN Patches, DINO-space pred (`e6esmgmu`)        | **81.7%**  |
+| RNN Patches, CE+pred, learned space (`tj9x820q`) | **78.3%**  |
 
 
-### Takeaway
+### Takeaways
 
-- RNN state is slighlty worse than just averaging DINO features. (Q: how hard is this task)
-- Action classification loss generalizing beyond SSV2!!
+- All RNN states trail DINO mean-pool (88%)
+- CLS > patches consistently (~4-7 pts)
+
+ *maybe above two change with better W_pred*
+
+- DINO-space > JEPA + action classification: CE loss overfits to SSV2
+- Need non-action-recognition eval to test that
+
+### Takeaways
+
+- dino-space better than JEPA right now - maybe changes with SigReg etc.
+- Table 4 suggests, patch prediction better preserves temporal order
+  - maybe UCF measures general vision features not temporal (can explain why mean pool > concat)
 
 ---
 
@@ -76,11 +89,11 @@ All baselines computed on SSv2 val, skipping t=0 prediction (first frame predict
 *Table 2*
 
 
-| Baseline                             | L2      |
-| ------------------------------------ | ------- |
-| Copy current frame                   | 609     |
-| Causal Transformer (concat baseline) | 517     |
-| RNN                                  | **513** |
+| Baseline                             | L2        |
+| ------------------------------------ | --------- |
+| Copy current frame                   | 609       |
+| Causal Transformer `ud2ncxlq`        | **100.1** |
+| RNN `2ldiw9xk`                       | 176.9     |
 
 
 ### Patch tokens (S=256, D=384)
@@ -94,6 +107,18 @@ All baselines computed on SSv2 val, skipping t=0 prediction (first frame predict
 | Causal Transformer (concat baseline) | **783** |
 | RNN                                  | 851     |
 
+
+### Mean-pooled patch tokens (S=1, D=384)
+
+*Table 3b*
+
+| Baseline                             | L2    |
+| ------------------------------------ | ----- |
+| Copy current frame                   | 162.8 |
+| Causal Transformer                   | tbd   |
+| RNN                                  | tbd   |
+
+Copy baseline 162.8 — much lower than CLS (609) and raw patches (1085). Mean-pooling averages 256 spatial locations, making consecutive frames nearly identical. Very little temporal signal — easy to predict but potentially poor training signal for dynamics.
 
 **Takeaways:**
 
@@ -219,6 +244,38 @@ For stage 1 (state expressive enough for stage 2 forecasting), patches are bette
 
 ---
 
+## Static vs Dynamic patch decomposition**
+
+Does the patch model's improvement over copy come from learning dynamics or just smoothness?
+
+1. Compute per-patch motion score from GT features: average frame-to-frame L2 per spatial position per video
+2. Median split per video: **top 50% = dynamic, bottom 50% = static**
+3. Copy baseline error (`||x_t - x_{t-1}||²`) averaged separately over each group
+4. Model `pred_error_l2` (B, T, S), skip t=0, averaged separately over each group
+5. Compare: `(copy_err - model_err) / copy_err` per group
+
+Also: copy shuffle ratio on dynamic patches only — if high (close to CLS's 11.2x), CLS is just tracking dynamic content. If low, CLS captures something else.
+
+Script: `root/evals/static_dynamic_decomposition.py`
+
+**Results** (`e6esmgmu`, pred only, patches, DINO space):
+
+
+|                 | Copy Baseline | Model  | Improvement |
+| --------------- | ------------- | ------ | ----------- |
+| Dynamic patches | 1430.6        | 1077.0 | **24.7%**   |
+| Static patches  | 746.9         | 625.9  | **16.2%**   |
+
+
+- Improvement concentrated on dynamic patches (1.5x ratio) → model learned dynamics, not just smoothing.
+- `tj9x820q` **(CE + pred, patches, learned space)**: model error dynamic = 4.2, static = 3.0  Dynamic patches harder to predict even in learned space  (can't have copy baseline in latent space)
+
+### Dynamic-only copy shuffle ratio for patches= **1.40x** (vs CLS 11.2x)
+
+- Thus, CLS captures something beyond patch-level motion (visual/semantic shifts, not just dynamics).
+
+---
+
 **4. Video reversal test** (weaker than expected)
 
 - Reversed video preserves frame similarity but flips causal direction. However, the Bayesian update rule adapts — after 2-3 reversed frames, the state accumulates reversed dynamics and predicts accordingly. So a good dynamics model performs well on reversed video too, making this test less informative.
@@ -242,19 +299,9 @@ Currently, prediction-only in learned space collapses — W_enc degenerates to m
 
 - recurrent state not a bottleneck (table 2)
 - expressive W_pred should help bridge patch tokens performance to causal transformer
-- also, make it as good a mean pooled embeddings (table 1) 
+- also, make it as good a mean pooled embeddings (table 1)
 
 ### 2. Diagnostics on existing models
-
-**a) Static vs Dynamic patch decomposition**
-
-Does the patch model's improvement over copy come from learning dynamics or just smoothness?
-
-- get static and dynamic tokens
-- Compare model error vs copy baseline separately for each group
-- check improvement on dynamic tokens
-
-Also answers the open Q: compute copy shuffle ratio on dynamic patches only. If it's high (close to CLS's 11.2x), confirms CLS is effectively tracking dynamic content.
 
 **b) OOD prediction decay curve (tbd)** 
 
@@ -275,10 +322,17 @@ Can the model extrapolate trajectories, or does it collapse to the mean without 
   - **If model collapses to mean immediately** → no trajectory learning.
 - Works for both CLS and patch models.
 
+### 2. Ultimate eval - long horizon chunk prediction (i.e stage 2)
 
+- eval A in stage 1 md
 
 ### ask saining
 
 - leWM --> zero shot planning is nice, but they train and eval on sims
 - long horizon data hard - ego4d; sims
+- generative or contrastive
+  - MSE --> futures multimodal 
+  - pixels vs latent
+
+---
 

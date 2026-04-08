@@ -24,12 +24,12 @@ The primary goal is building a good **next-frame predictor** in DINO feature spa
 - **eval/ce_loss**: cross-entropy loss on validation set
 - **eval/pred_loss**: L2 next-frame prediction error (mean over timesteps 1+, skipping t=0)
 - **eval/total_loss**: ce_loss + pred_loss_weight * pred_loss (or just pred_loss when action_classification=False)
-- **eval/pred_error_l2**: plotly line plot — per-timestep L2 prediction error across the clip (how well the RNN predicts the next DINO frame feature)
-- **eval/update_gate**: plotly line plot — per-timestep gating values (how much the RNN state updates at each frame)
+- **eval/pred_error_l2**: plotly line plot — per-timestep L2 prediction error across the clip
+- **eval/update_gate**: plotly line plot — per-timestep gating values
 - **eval/update_norm**: plotly line plot — per-timestep L2 norm of the state update vector
-- **eval/r_novelty**: plotly line plot — ratio of novel information in the update (u_novelty / u_total)
-- **eval/memory_l2**: plotly line plot — L2 shift between consecutive hidden states ||h_t - h_{t-1}||
-- **eval/cos_sim**: plotly line plot — cosine similarity between consecutive hidden states (direction stability)
+- **eval/r_novelty**: plotly line plot — ratio of novel information in the update
+- **eval/memory_l2**: plotly line plot — L2 shift between consecutive hidden states
+- **eval/cos_sim**: plotly line plot — cosine similarity between consecutive hidden states
 - **eval/h_t_norm**: plotly line plot — norm of hidden state over time
 
 ## Train Metrics
@@ -39,85 +39,198 @@ The primary goal is building a good **next-frame predictor** in DINO feature spa
 - **trainer/lr**: current learning rate
 - **trainer/iter_ms_avg**: average iteration time in ms
 
+---
 
 ## Experiments
 
-### 1. update=w(error)_L2weight1e-1
-- **Config**: action_classification=True, next_frame_pred=True, pred_loss_weight=0.1, update_type=surprise, epochs=100, load_cache_feats=True
+### 1. `zyvsy8gk` — RNN, CE + pred, CLS, learned space
+
+- **Run name**: `update=w(error)_L2weight1e-1`
 - **Checkpoint**: `/nas/manu/vjepa2/outputs/update=w(error)_L2weight1e-1_zyvsy8gk/best.pt`
-- **Goal**: train RNN with both CE and next-frame prediction loss
-- **UCF101 Transfer Probe Results** (20 epochs, linear head, frozen encoder, no augmentation):
+- **Config**: `action_classification=True`, `next_frame_pred=True`, `pred_loss_weight=0.1`, `update_type=surprise`, `use_patch_tokens=False`, `predict_in_dino_space=False`, `epochs=100`
+- **Train command**:
+```bash
+python train.py --config base --wandb.run_name update=w(error)_L2weight1e-1 \
+    --data_dir /nas/manu --output_dir /nas/manu/vjepa2/outputs \
+    --load_cache_feats --action_classification --next_frame_pred \
+    --pred_loss_weight 0.1 --epochs 100
+```
+- **Results**: Table 1 (UCF101 84.0%), Table 4 (normal=2.23, shuffled=2.29, ratio=1.03x)
 
-| Model | UCF101 Accuracy |
-|-------|----------------|
-| DINO mean-pool (baseline) | **88.0%** |
-| DINO concat 8×384 (baseline) | **86.0%** |
-| RNN state 384-dim (frozen) | **84.0%** |
+**Reproduce Table 1 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
+    --checkpoint /nas/manu/vjepa2/outputs/update=w(error)_L2weight1e-1_zyvsy8gk/best.pt \
+    --mode probe --train_csv /nas/manu/ucf101/data/train.csv \
+    --data_csv /nas/manu/ucf101/data/test.csv \
+    --num_classes 101 --cache_features --no_aug
+```
 
-- **Interpretation**: RNN state trails both DINO baselines by 2-4 points. The recurrent processing is losing general visual information rather than adding useful temporal structure for transfer. State is overfit to SSv2 action patterns.
+**Reproduce Table 4 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/temporal_shuffle_test.py \
+    --checkpoint /nas/manu/vjepa2/outputs/update=w(error)_L2weight1e-1_zyvsy8gk/best.pt \
+    --data_dir /nas/manu --batch_size 64 --num_shuffles 3 --gpu 0
+```
 
-### 2. next_frame_pred_only
-- **Config**: action_classification=False, next_frame_pred=True, no pred_loss_weight scaling, epochs=100
-- **Goal**: train RNN purely on next-frame prediction (no classification head)
-- **Result**: (pending)
+---
+
+### 2. `2ldiw9xk` — RNN, pred only, CLS, DINO space
+
+- **Run name**: `pred_only_dino_space` (or similar)
+- **Checkpoint**: `/nas/manu/vjepa2/outputs/<run_name>_2ldiw9xk/best.pt`
+- **Config**: `action_classification=False`, `predict_in_dino_space=True`, `use_patch_tokens=False`, `epochs=100`
+- **Train command**:
+```bash
+python train.py --config base --wandb.run_name pred_only_dino_space \
+    --data_dir /nas/manu --output_dir /nas/manu/vjepa2/outputs \
+    --load_cache_feats --no-action_classification \
+    --encoder.rnn.predict_in_dino_space --epochs 100
+```
+- **Results**: Table 1 (UCF101 85.4%), Table 2 (RNN=176.9 — note: the 513 in Table 2 is stale, from ~100k steps), Table 4 (normal=176.9, shuffled=211.9, ratio=1.20x, copy=620)
+
+**Reproduce Table 2 RNN row / Table 4 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/temporal_shuffle_test.py \
+    --checkpoint /nas/manu/vjepa2/outputs/<run_name>_2ldiw9xk/best.pt \
+    --data_dir /nas/manu --batch_size 64 --num_shuffles 3 --gpu 0
+```
+
+**Reproduce Table 1 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
+    --checkpoint /nas/manu/vjepa2/outputs/<run_name>_2ldiw9xk/best.pt \
+    --mode probe --train_csv /nas/manu/ucf101/data/train.csv \
+    --data_csv /nas/manu/ucf101/data/test.csv \
+    --num_classes 101 --cache_features --no_aug
+```
+
+---
+
+### 3. `e6esmgmu` — RNN, pred only, patches, DINO space
+
+- **Run name**: `patch_pred_dino_space`
+- **Checkpoint**: `/nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt`
+- **Config**: `action_classification=False`, `predict_in_dino_space=True`, `use_patch_tokens=True`, `epochs=100`
+- **Train command**:
+```bash
+python train.py --config base --wandb.run_name patch_pred_dino_space \
+    --data_dir /nas/manu --output_dir /nas/manu/vjepa2/outputs \
+    --load_cache_feats --use_patch_tokens --no-action_classification \
+    --encoder.rnn.predict_in_dino_space --batch_size 8 --val_batch_size 8 --epochs 100
+```
+- **Results**: Table 1 (UCF101 81.7%), Table 3 (RNN=851), Table 4 (normal=851.5, shuffled=1114.1, ratio=1.31x, copy=1116), static/dynamic decomp (dynamic 24.7%, static 16.2%)
+
+**Reproduce Table 3 RNN row / Table 4 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/temporal_shuffle_test.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt \
+    --data_dir /nas/manu --batch_size 64 --num_shuffles 3 --gpu 0
+```
+
+**Reproduce static/dynamic decomposition:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/static_dynamic_decomposition.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt \
+    --data_dir /nas/manu --batch_size 64 --gpu 0
+```
+
+**Reproduce Table 1 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt \
+    --mode probe --train_csv /nas/manu/ucf101/data/train.csv \
+    --data_csv /nas/manu/ucf101/data/test.csv \
+    --num_classes 101 --cache_features --no_aug
+```
+
+---
+
+### 4. `tj9x820q` — RNN, CE + pred, patches, learned space
+
+- **Run name**: `patch_ce_pred`
+- **Checkpoint**: `/nas/manu/vjepa2/outputs/patch_ce_pred_tj9x820q/best.pt`
+- **Config**: `action_classification=True`, `predict_in_dino_space=False`, `use_patch_tokens=True`, `pred_loss_weight=0.1`, `epochs=100`
+- **Train command**:
+```bash
+python train.py --config base --wandb.run_name patch_ce_pred \
+    --data_dir /nas/manu --output_dir /nas/manu/vjepa2/outputs \
+    --load_cache_feats --use_patch_tokens --action_classification \
+    --pred_loss_weight 0.1 --batch_size 8 --val_batch_size 8 --epochs 100
+```
+- **Results**: Table 1 (UCF101 78.3%), Table 4 (normal=3.80, shuffled=4.29, ratio=1.13x, copy=—)
+
+**Reproduce Table 4 row:**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/temporal_shuffle_test.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_ce_pred_tj9x820q/best.pt \
+    --data_dir /nas/manu --batch_size 64 --num_shuffles 3 --gpu 0
+```
+
+---
+
+### 5. `ud2ncxlq` — Causal Transformer, pred only, CLS, DINO space
+
+- **Checkpoint**: checkpoint path unknown — check wandb
+- **Config**: `encoder.type=causal_transformer`, `action_classification=False`, `use_patch_tokens=False`, evaluated at ~27 epochs
+- **Train command**:
+```bash
+python train.py --config base --wandb.run_name causal_pred_cls \
+    --data_dir /nas/manu --output_dir /nas/manu/vjepa2/outputs \
+    --load_cache_feats --no-action_classification \
+    --encoder.type causal_transformer --epochs 100
+```
+- **Results**: Table 2 (Causal Transformer=517, at ~27 epochs)
+- **Note**: 517 is from an early checkpoint (~27 epochs). Fully trained number unknown.
+
+---
+
+### 6. `r55x2lcn` — Causal Transformer, pred only, patches, DINO space
+
+- **Checkpoint**: checkpoint path unknown — check wandb
+- **Config**: `encoder.type=causal_transformer`, `action_classification=False`, `use_patch_tokens=True`
+- **Train command**:
+```bash
+python train.py --config base --wandb.run_name causal_pred_patches \
+    --data_dir /nas/manu --output_dir /nas/manu/vjepa2/outputs \
+    --load_cache_feats --use_patch_tokens --no-action_classification \
+    --encoder.type causal_transformer --batch_size 8 --val_batch_size 8 --epochs 100
+```
+- **Results**: Table 3 (Causal Transformer=783)
+
+---
 
 ## Tools
-- **analyze_wandb_run.py**: `python analyze_wandb_run.py <user>/<project>/<run_id>` — fetches and prints final eval/train metrics and loss trajectory from a wandb run
+- **analyze_wandb_run.py**: `python analyze_wandb_run.py <user>/<project>/<run_id>` — fetches and prints final eval/train metrics. Use `wandb.Api(timeout=60)`.
 
 ## Transfer & OOD Evaluation
 
-Beyond SSv2 metrics, we need to know if the recurrent state captures **general visual dynamics** or is overfit to SSv2 action patterns. Two evals answer this:
-
 ### Eval 1: Transfer Linear Probe (UCF101)
 
-Freeze the trained encoder, train a fresh linear head on UCF101 (101 classes, ~13K videos). Compare against a DINO mean-pool baseline (no RNN).
-
-**What to look for:**
-- RNN state accuracy vs DINO baseline: if RNN is significantly better, the recurrent state adds value beyond averaging DINO features
-- If RNN accuracy ≈ baseline: the state isn't capturing useful temporal structure that transfers
-- If RNN accuracy < baseline: the state is actively discarding information useful for other tasks (overfit to SSv2)
-
-**How to run:**
 ```bash
-# RNN transfer
-python eval_transfer.py --checkpoint /path/to/best.pt --mode probe \
+PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
+    --checkpoint /path/to/best.pt --mode probe \
     --train_csv /nas/manu/ucf101/data/train.csv \
     --data_csv /nas/manu/ucf101/data/test.csv \
-    --num_classes 101 --output_dir outputs/eval_probe
+    --num_classes 101 --cache_features --no_aug
 
-# DINO mean-pool baseline
-python eval_transfer.py --checkpoint /path/to/best.pt --mode probe --baseline \
+# DINO mean-pool baseline (run once, reuse)
+PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
+    --checkpoint /path/to/best.pt --mode probe --baseline \
     --train_csv /nas/manu/ucf101/data/train.csv \
     --data_csv /nas/manu/ucf101/data/test.csv \
-    --num_classes 101 --output_dir outputs/eval_probe_baseline
+    --num_classes 101 --cache_features --no_aug
 ```
-
-**Outputs:** `probe_results.json` with `best_acc`, `final_acc`, etc.
 
 ### Eval 2: OOD Prediction Error Decay Curve
 
-Run inference on SSv2 val AND UCF101 test, collect `pred_error_l2` per timestep, compare curves.
-
-**What to look for:**
-- Similar decay shape on both → model learned general dynamics
-- Much higher/flatter pred_error on UCF101 → model memorized SSv2-specific temporal patterns
-- Also compare: update_norms, r_novelty, hidden state norms across distributions
-
-**How to run:**
 ```bash
-python eval_transfer.py --checkpoint /path/to/best.pt --mode decay \
+PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
+    --checkpoint /path/to/best.pt --mode decay \
     --data_csv /nas/manu/ucf101/data/test.csv \
     --ssv2_val_csv /nas/manu/ssv2/data/validation.csv \
     --output_dir outputs/eval_decay
 ```
-
-**Outputs:** `pred_error_decay.png`, `update_norm_decay.png`, `hidden_state_norm_decay.png`, `novelty_ratio_decay.png`, plus raw tensors `decay_ssv2.pt` and `decay_ood.pt`.
-
-### UCF101 Setup
-```bash
-bash scripts/prepare_ucf101.sh /nas/manu/ucf101
-```
-Downloads videos (~7GB) + train/test splits, generates CSVs at `/nas/manu/ucf101/data/{train,test}.csv`.
 
 ## Open Questions
 -
