@@ -232,5 +232,42 @@ PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
     --output_dir outputs/eval_decay
 ```
 
+## Reproduction Log
+
+### 2026-04-08 — Table 2 (SSv2 next-frame pred_loss, CLS) reproduced + corrected
+
+**Bug found and fixed.** Previously published numbers (Causal Transformer 100.1, RNN 176.9) were computed by averaging `pred_error_l2` over the full `validation.pt` file, which is zero-padded to 168913 rows. Only the first 24777 rows are real validation samples (see `validation.csv`). The remaining ~144k zero rows dilute the mean by ~7×. Root cause: `root/models/model.py:74` allocated `id_to_feat` with the train-split size unconditionally; train.py then saved the whole buffer. Fixed by trimming at save time and by truncating in every reader (`temporal_shuffle_test.py`, repro scripts). `validation_patches.pt` is unaffected — `precompute_patch_feats.py` sized it correctly.
+
+**Corrected Table 2** (mean over N=24777 valid val samples, t=1..7, CLS DINO space):
+
+| Model | Checkpoint | pred_loss (corrected) | Old (padded) |
+|---|---|---|---|
+| Copy-last-frame baseline                                | (data only)                                | **609.13** | 609 (was already truncated) |
+| Causal Transformer, pred only, CLS DINO (`ud2ncxlq`)    | `causal_pred_cls_ud2ncxlq/last.pt`         | **517.06** | 100.1 |
+| RNN, pred only, CLS DINO (`2ldiw9xk`)                   | `pred_in_dino_space_2ldiw9xk/last.pt`      | **512.96** | 176.9 |
+
+**Reinterpretation:** RNN (513) ≈ Causal Transformer (517) ≈ ~16% better than copy (609). The qualitative finding "single-state RNN matches a transformer with full memory for CLS, so the state isn't a bottleneck" still holds, but the absolute headroom over copy is much smaller than the old numbers suggested. The earlier "Transformer at 100.1" upper-bound claim is invalid — `wandb`-logged val pred_loss from `train.py` was always correct (the val dataset iterates only real indices); the bug only hit standalone evals that loaded `validation.pt` directly.
+
+Reproduce: `bash scripts/repro/table2_ssv2_pred_loss_cls.sh`. Both Table 2 model rows currently use `last.pt` because the runs predate the best-checkpoint fix described below — no `best.pt` exists on disk for either. Any newly trained pred-only run will save `best.pt` correctly.
+
+**Follow-up fixes (2026-04-08):**
+- `root/models/model.py:74` — `id_to_feat` is no longer a magic `zeros(168913, ...)`. It now sizes itself from `args.train_dataset_len`/`args.val_dataset_len` (set by `train.py:241-243` from the actual datasets) and raises if those aren't set. The save sites in `train.py` already trim with `model.id_to_feat[:len(loader.dataset)]`, so any newly cached `validation.pt` is correctly sized.
+- `train.py:349` — `best.pt` save criterion now branches on `action_classification`: highest val acc when classifying, lowest val pred_loss when pred-only. Previously pred-only runs (e.g. `2ldiw9xk`, `e6esmgmu`) never wrote a `best.pt` because `acc > best_acc` was always false (acc stayed 0). Tracks `best_pred_loss` separately, seeded from the initial val.
+
+### 2026-04-08 — Table 1 (UCF101 linear probe) reproduced
+
+Re-ran all 6 rows of `docs/april_3_meet.md` Table 1 in parallel (one GPU each), 20 epochs, AdamW lr=1e-3, batch=64, no aug, cached features. All match within ≤0.5pt of the meeting doc.
+
+| Model | Checkpoint | best_acc (repro) | Table 1 |
+|---|---|---|---|
+| DINO mean-pool                          | (baseline, no ckpt)                              | **88.03%** | 88.0% |
+| DINO concat                             | (baseline, no ckpt)                              | **86.10%** | 86.0% |
+| RNN CLS, DINO-space pred (`2ldiw9xk`)   | `pred_in_dino_space_2ldiw9xk/last.pt`            | **85.38%** | 85.4% |
+| RNN CLS, CE+pred learned (`zyvsy8gk`)   | `update=w(error)_L2weight1e-1_zyvsy8gk/best.pt`  | **84.01%** | 84.0% |
+| RNN Patch, DINO-space pred (`e6esmgmu`) | `patch_pred_dino_space_e6esmgmu/last.pt`         | **81.71%** | 81.7% |
+| RNN Patch, CE+pred learned (`tj9x820q`) | `patch_ce_pred_tj9x820q/best.pt`                 | **78.83%** | 78.3% |
+
+Reproduction artifacts in `outputs/repro_table1/`. Reproduce with `bash scripts/repro/table1_ucf101_probe.sh` (see `docs/repo_context.md` → UCF101 Linear Probe).
+
 ## Open Questions
 -

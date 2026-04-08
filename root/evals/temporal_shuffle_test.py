@@ -91,6 +91,16 @@ def main():
     feats = torch.load(feat_path, mmap=True)
     print(f"Feature shape: {feats.shape}, dtype: {feats.dtype}")
 
+    # validation.pt (CLS) is zero-padded to 168913 (size of the train split) — see
+    # root/models/model.py:74 for the cause. Truncate to the real number of val
+    # samples (= row count of validation.csv, currently 24777). validation_patches.pt
+    # is correctly sized by precompute_patch_feats.py, but truncating is harmless.
+    val_csv = os.path.join(args.data_dir, "ssv2/data/validation.csv")
+    n_valid = sum(1 for _ in open(val_csv))
+    if feats.shape[0] > n_valid:
+        print(f"Truncating padded cache: {feats.shape[0]} -> {n_valid} (real val samples)")
+        feats = feats[:n_valid]
+
     # Dummy labels (not used for pred_loss)
     labels = torch.zeros(feats.shape[0], dtype=torch.long)
 

@@ -71,7 +71,19 @@ class DinoFrameEncoder(nn.Module):
             self.dino.eval()
         
         if self.cache_dino_feats:
-            self.id_to_feat = torch.zeros(168913, 8, 384) # train:168913, val: 24777
+            # Sized for the larger split so a single buffer covers both train and val
+            # caching. train.py sets train_dataset_len + val_dataset_len before
+            # constructing the model. Save sites still trim with
+            # `model.id_to_feat[:len(loader.dataset)]` so the on-disk file matches the
+            # actual split size.
+            train_n = getattr(args, "train_dataset_len", None)
+            val_n = getattr(args, "val_dataset_len", None)
+            if train_n is None or val_n is None:
+                raise ValueError(
+                    "cache_dino_feats=True requires args.train_dataset_len and "
+                    "args.val_dataset_len to be set before _build_model is called."
+                )
+            self.id_to_feat = torch.zeros(max(train_n, val_n), 8, 384)
         self.use_patch_tokens = getattr(args, "use_patch_tokens", False)
         if getattr(args, "val_dataset_len", None) is not None and not self.use_patch_tokens and self.encoder_type == "rnn":
             self.update_gates = torch.zeros(args.val_dataset_len, args.eval_frames_per_clip)

@@ -53,7 +53,8 @@ import plotly.graph_objects as go
 logger = get_logger(__name__, force=True)
 
 global_vars = {
-    "best_acc": 0.0,
+    "best_acc": 0.0,           # used when action_classification=True
+    "best_pred_loss": float("inf"),  # used when action_classification=False
     "global_step": 0,
 }
 
@@ -142,8 +143,9 @@ def run_validation(
         save_dir = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1])
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, "validation.pt")
-        print(f"Saving dino feats to {save_path}")
-        torch.save(model.id_to_feat, save_path)                                              
+        n_valid = len(loader.dataset)
+        print(f"Saving dino feats to {save_path} (trimmed to {n_valid} valid rows)")
+        torch.save(model.id_to_feat[:n_valid].clone(), save_path)
         exit()
 
     if _is_distributed(world_size):
@@ -238,6 +240,7 @@ def main(args) -> None:
 
 
     train_ds, train_loader, train_sampler, val_ds, val_loader, val_sampler = dataset.get_loaders(args, train_transform, eval_transform, sampling_kwargs, rank, world_size, is_master)
+    args.train_dataset_len = len(train_ds)
     args.val_dataset_len = len(val_ds)
 
     # --- OOD eval loader (optional)
@@ -265,7 +268,11 @@ def main(args) -> None:
     
     if args.init_eval:
         print("|RUNNING INITIAL VALIDATION...")
-        _vloss, global_vars["best_acc"], ssv2_pe = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
+        _vloss, _vacc, ssv2_pe = run_validation(model, val_loader, device, world_size, epoch=0, step=global_step, is_master=is_master)
+        if getattr(args, "action_classification", True):
+            global_vars["best_acc"] = _vacc
+        else:
+            global_vars["best_pred_loss"] = _vloss
         if ood_loader is not None:
             run_ood_eval(model, ood_loader, device, ssv2_pe, is_master)
 
@@ -346,8 +353,19 @@ def main(args) -> None:
                 if ood_loader is not None:
                     run_ood_eval(model, ood_loader, device, ssv2_pe, is_master)
                 model_state = model.module.state_dict() if isinstance(model, DistributedDataParallel) else model.state_dict()
-                if acc > global_vars["best_acc"]:
-                    global_vars["best_acc"] = acc
+                # best.pt save criterion: highest val acc when classifying, lowest val
+                # pred_loss when training pred-only. Without this branch, pred-only runs
+                # never saved a best.pt because acc stayed 0 and `acc > best_acc` was
+                # always false (left 2ldiw9xk and e6esmgmu with only last.pt).
+                if getattr(args, "action_classification", True):
+                    is_best = acc > global_vars["best_acc"]
+                    if is_best:
+                        global_vars["best_acc"] = acc
+                else:
+                    is_best = _vloss < global_vars["best_pred_loss"]
+                    if is_best:
+                        global_vars["best_pred_loss"] = _vloss
+                if is_best:
                     utils.save_checkpoint(optimizer, args, epoch, global_step, model_state, logger, ckpt_name="best")
                 utils.save_checkpoint(optimizer, args, epoch, global_step, model_state, logger, ckpt_name="last")
                 
@@ -357,8 +375,9 @@ def main(args) -> None:
             save_dir = os.path.join(args.data_dir, "ssv2/dino_feats", args.dino_model.split("_")[-1])
             os.makedirs(save_dir, exist_ok=True)
             save_path = os.path.join(save_dir, "train.pt")
-            print(f"Saving dino feats to {save_path}")
-            torch.save(model.id_to_feat, save_path)                                              
+            n_train = len(train_loader.dataset)
+            print(f"Saving dino feats to {save_path} (trimmed to {n_train} valid rows)")
+            torch.save(model.id_to_feat[:n_train].clone(), save_path)
             exit()
         if _is_distributed(world_size):
             dist.barrier()
