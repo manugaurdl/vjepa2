@@ -234,6 +234,52 @@ PYTHONPATH=/home/manu/vjepa2 python eval_transfer.py \
 
 ## Reproduction Log
 
+### 2026-04-08 — Tables 4 & 5 (temporal shuffle + copy shuffle sensitivity) reproduced
+
+Reproduced with the padding-fixed `temporal_shuffle_test.py` (truncates CLS cache to 24777). Patch rows match published values exactly; CLS rows shifted upward because the padding bug was previously biasing ratios toward 1 (zero-padded rows gave ≈equal loss under normal and shuffled, adding a constant to both num and denom).
+
+**Table 4 (model temporal shuffle test, SSv2 val, 3 seeds).** Absolute pred_loss is in incompatible units across rows: DINO-space rows are raw DINO L2 (comparable to Tables 2/3 and to copy baseline); learned-space rows are in a W_enc-projected space and only the ratio is interpretable.
+
+| Model | Normal | Shuffled | Ratio (repro) | Published ratio |
+|---|---|---|---|---|
+| RNN CLS, CE+pred, learned space (`zyvsy8gk`)   | 3.70   | 4.13    | **1.12x** | 1.03x |
+| RNN CLS, pred only, DINO space (`2ldiw9xk`)    | 512.96 | 752.44  | **1.47x** | 1.20x |
+| RNN Patches, pred only, DINO space (`e6esmgmu`)| 851.46 | 1113.76 | **1.31x** | 1.31x |
+| RNN Patches, CE+pred, learned space (`tj9x820q`)| 3.59 | 4.08    | **1.14x** | 1.13x |
+
+**Table 5 (data-only copy baseline shuffle sensitivity, 3 seeds).** Within-video permutation: for each video, shuffle its 8 frames and recompute consecutive-pair L2.
+
+| Row | Normal | Shuffled | Copy ratio (repro) | Published |
+|---|---|---|---|---|
+| Patches (DINO) | 1088.71 | 1587.54 | **1.46x** | 1.46x |
+| CLS (DINO)     | 609.13  | 1003.72 | **1.65x** | 11.2x |
+
+Patches exactly match; CLS does not. Checked: within-video gives 1.65x, cross-video (random frame from any other video) gives 5.95x. Neither reproduces 11.2x. The patches row reproduces exactly at 1.46x using the within-video method, so the methodology is right — the published 11.2x for CLS is likely an earlier buggy number; the narrative "random CLS pairs are very different" is only true cross-video, and even then the ratio is ~6x not 11x.
+
+**Reinterpretation (important — this rewrites the Table 4 CLS story):**
+
+Old story for `2ldiw9xk` (CLS DINO): shuffled model (211.9) still much better than copy (620), so the CLS model "learned both multi-frame aggregation (order-independent, survives shuffling) and some dynamics (20% degradation from shuffling)."
+
+New story: shuffled model (**752.44**) is **worse than copy (609.13)**. The CLS model's entire edge over copy is order-dependent — just like patches. When frames are shuffled, the model is strictly worse than a copy-last-frame baseline. The "multi-frame aggregation survives shuffling" finding was an artifact of the padding bug; the correct picture is that both CLS and patch RNNs use temporal order to beat copy, and neither has an order-independent aggregation advantage.
+
+**Caveat on the shuffle test itself:** ratio > 1 only proves the model is not permutation-invariant. It does NOT distinguish "learned trajectories" from "smart EMA / recency bias" — an EMA also degrades under shuffling because the most-recent frame is weighted highest. The right experiment for "did it learn dynamics?" is autoregressive rollout (freeze state at t, predict t+1..t+k without GT, compare error growth to copy(t→t+k)). Still to do.
+
+Reproduce: `bash scripts/repro/table4_temporal_shuffle.sh` and `bash scripts/repro/table5_copy_shuffle_ratio.sh`.
+
+### 2026-04-08 — Table 3 (SSv2 next-frame pred_loss, PATCHES) reproduced
+
+Same metric as Table 2 but in DINO patch-token space (S=256, D=384). Reads `validation_patches.pt`, which is correctly sized `(24777, 8, 256, 384)` — built by `precompute_patch_feats.py`, not by `train.py --cache_dino_feats`, so the padding bug from Table 2 does not apply here. All three rows match published values within ~1% (small drift likely from fp16→fp32 cast path / chunking, published values were rounded).
+
+| Model | Checkpoint | pred_loss (repro) | Published |
+|---|---|---|---|
+| Copy-last-frame baseline                                       | (data only)                                | **1088.71** | 1085 |
+| Causal Transformer, pred only, patches DINO (`r55x2lcn`)       | `causal_pred_patches_r55x2lcn/last.pt`     | **788.60**  | 783  |
+| RNN, pred only, patches DINO (`e6esmgmu`)                      | `patch_pred_dino_space_e6esmgmu/last.pt`   | **851.46**  | 851  |
+
+Reproduce: `bash scripts/repro/table3_ssv2_pred_loss_patches.sh`. Copy baseline is computed in chunks of 256 videos because the full diff tensor is ~60 GB. Both model rows use `last.pt` (no `best.pt` exists — pred-only runs predate the best.pt fix in `train.py:349`).
+
+**Reinterpretation:** Causal Transformer (789) clearly beats RNN (851), unlike CLS where they were equal (517 vs 513). For patches the state IS a bottleneck — explicit attention over all 8×256=2048 past patch tokens lets the transformer model patch-level motion that the RNN's single state can't track. Both still beat copy (1089), so both learn *something* beyond frame smoothness.
+
 ### 2026-04-08 — Table 2 (SSv2 next-frame pred_loss, CLS) reproduced + corrected
 
 **Bug found and fixed.** Previously published numbers (Causal Transformer 100.1, RNN 176.9) were computed by averaging `pred_error_l2` over the full `validation.pt` file, which is zero-padded to 168913 rows. Only the first 24777 rows are real validation samples (see `validation.csv`). The remaining ~144k zero rows dilute the mean by ~7×. Root cause: `root/models/model.py:74` allocated `id_to_feat` with the train-split size unconditionally; train.py then saved the whole buffer. Fixed by trimming at save time and by truncating in every reader (`temporal_shuffle_test.py`, repro scripts). `validation_patches.pt` is unaffected — `precompute_patch_feats.py` sized it correctly.
