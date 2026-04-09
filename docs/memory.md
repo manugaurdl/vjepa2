@@ -80,6 +80,7 @@ Full commands in `docs/repo_context.md`. Brief summary:
 | `temporal_shuffle` | `root/evals/temporal_shuffle_test.py` | Does model rely on temporal order? (ratio = shuffled/normal pred_loss) |
 | `static_dynamic` | `root/evals/static_dynamic_decomposition.py` | Is improvement over copy concentrated on dynamic patches? (patches only) |
 | `ood_decay` | `eval_transfer.py --mode decay` | Does pred_error_l2 curve generalize to OOD data? (tbd) |
+| `autoregressive_rollout` | `root/evals/autoregressive_rollout.py` | Does model extrapolate dynamics or collapse to constant? Iterates `w_pred` on its own output from a partial-context state, compares per-horizon L2 vs copy/linear baselines. RNN + DINO-space only. |
 
 ---
 

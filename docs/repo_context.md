@@ -55,7 +55,7 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/temporal_shuffle_test.py \
     --data_dir /nas/manu --batch_size 64 --num_shuffles 3 --gpu 0
 ```
 
-- Loads cached val features from `/nas/manu/ssv2/dino_feats/vits14/validation{_patches}.pt` based on `use_patch_tokens` in checkpoint config
+- Loads cached val features from `/nas/manu/ssv2/dino_feats/vits14/validation{,_patches,_meanpool}.pt` based on `use_patch_tokens` / `meanpool_patches` flags in checkpoint config
 - Outputs: normal pred_loss, shuffled pred_loss (avg over seeds), ratio
 - Accesses `model.pred_error_l2` after forward pass (shape `(B, T, S)`, skips t=0)
 
@@ -71,6 +71,22 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/static_dynamic_decomposition.py \
 
 - Copy baseline comparison only valid for DINO-space models (`predict_in_dino_space=True`). For learned-space models, ignore copy baseline column — model error per group is still meaningful.
 - Also computes copy shuffle ratio on dynamic patches only (data-only metric, valid for any model).
+
+## Eval: Autoregressive Rollout (evalID: `autoregressive_rollout`)
+
+Tests whether the model extrapolates dynamics or collapses to a constant once fresh frames stop arriving. Runs the RNN on the first `t_ctx` frames to build a state, then iterates `w_pred` for K = T − t_ctx steps with no new input (literal `w_pred(state) → w_pred(w_pred(state)) → ...`). Compares each horizon against a copy baseline (the frame-drift curve — the floor for any non-extrapolating predictor, incl. EMAs) and a linear-extrapolation baseline.
+
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/autoregressive_rollout.py \
+    --checkpoint /nas/manu/vjepa2/outputs/<run_name>/last.pt \
+    --data_dir /nas/manu --t_ctx 4 --batch_size 64 --gpu 0
+```
+
+- **RNN-only, DINO-space only.** Learned-space models (`predict_in_dino_space=False`) skipped: `w_pred` outputs live in the projected space and aren't comparable to raw DINO targets. Causal transformer rollout (append-token mechanics) is out of scope for v1.
+- Supports CLS (S=1), patches (S=256), and meanpool-patch (S=1). Picks `validation{,_patches,_meanpool}.pt` based on `use_patch_tokens` / `meanpool_patches` in the checkpoint config. Truncates padded CLS/meanpool cache.
+- Per-horizon error is sum-over-D L2 (same unit as Tables 2/3). For patch models, further averaged over S tokens per sample (matches `static_dynamic_decomposition.py`).
+- Context length `t_ctx` must be ≥ 2 (linear baseline needs the last two observed frames to estimate velocity). Default 4 gives K = 4 rollout steps for the standard 8-frame SSv2 clips.
+- Interpretation: model < copy at horizon k ⇒ extrapolating. model ≥ copy ⇒ collapsed to constant / behaving like a smoother. The copy curve is exactly what an EMA rolled out autoregressively would produce (it has nothing to integrate once frames stop coming, so it sits at the data's drift floor).
 
 ## Key model internals
 

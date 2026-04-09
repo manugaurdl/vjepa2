@@ -315,5 +315,45 @@ Re-ran all 6 rows of `docs/april_3_meet.md` Table 1 in parallel (one GPU each), 
 
 Reproduction artifacts in `outputs/repro_table1/`. Reproduce with `bash scripts/repro/table1_ucf101_probe.sh` (see `docs/repo_context.md` → UCF101 Linear Probe).
 
+### 2026-04-08 — Autoregressive rollout (evalID: `autoregressive_rollout`) first results
+
+New eval: build RNN state from first `t_ctx=4` frames, then iterate `w_pred` K=4 times (`w_pred(state) → w_pred(w_pred(state)) → ...`) with no new input. Per-horizon L2 vs copy/linear baselines. Eval + rationale documented in `docs/repo_context.md` → "Autoregressive Rollout" and `docs/april_3_meet.md` → rollout section.
+
+**`2ldiw9xk` — RNN CLS, pred only, DINO space** (`pred_in_dino_space_2ldiw9xk/last.pt`)
+
+| horizon k | copy   | linear   | model   | model/copy |
+|-----------|--------|----------|---------|------------|
+| 1         | 743.4  | 1894.6   | **606.6** | 0.82x ← extrap |
+| 2         | 992.6  | 4922.9   | 3303.9  | 3.33x ← collapse |
+| 3         | 1134.3 | 9360.0   | 3964.1  | 3.50x ← collapse |
+| 4         | 1204.4 | 15124.0  | 4742.3  | 3.94x ← collapse |
+
+**`e6esmgmu` — RNN Patches, pred only, DINO space** (`patch_pred_dino_space_e6esmgmu/last.pt`)
+
+| horizon k | copy   | linear   | model    | model/copy |
+|-----------|--------|----------|----------|------------|
+| 1         | 1270.9 | 3380.2   | **957.8**  | 0.75x ← extrap |
+| 2         | 1604.4 | 8622.2   | 4487.3   | 2.80x ← collapse |
+| 3         | 1767.5 | 16243.2  | 7685.6   | 4.35x ← collapse |
+| 4         | 1855.6 | 26219.1  | 15682.8  | 8.45x ← collapse |
+
+**Interpretation.** Both models beat copy at horizon 1 — unsurprising, that's literally the training objective (at t_ctx=4 the model has seen real frames 0..3, and `w_pred(state_3)` is trained to predict frame 4). But from k=2 onward, iterating `w_pred` on its own output diverges rapidly from the DINO manifold, and the model is strictly worse than a constant-last-frame predictor. Neither model has a stable attractor under iterated self-application of `w_pred`.
+
+This is consistent with the "smart 1-step predictor, not a dynamics model" hypothesis. It does NOT yet rule out extrapolation in an absolute sense — the way the architecture is trained, `w_pred` expects a real state as input, not its own output. A more faithful "AR rollout" would feed each prediction back as `h` into the surprise update, but that update has `error = pred - w_pred(state) = 0` and is degenerate (see `docs/april_3_meet.md` rollout section for the derivation). The clean conclusion: **under the only nondegenerate rollout available for this architecture, both DINO-space RNNs collapse past horizon 1.** Patches collapse faster than CLS in absolute ratio (8.4x vs 3.9x at k=4), consistent with patches living on a higher-dim manifold where iterated `w_pred` has more room to wander off.
+
+Linear baseline is useless here: DINO features have large per-frame noise, so `x_t + k·(x_t - x_{t-1})` blows up way above even the collapsed model. Keep it in the table anyway as a "dumb dynamics" sanity check.
+
+Reproduce:
+```bash
+# CLS
+PYTHONPATH=/home/manu/vjepa2 python root/evals/autoregressive_rollout.py \
+    --checkpoint /nas/manu/vjepa2/outputs/pred_in_dino_space_2ldiw9xk/last.pt \
+    --data_dir /nas/manu --t_ctx 4 --batch_size 256 --gpu 0
+# Patches
+PYTHONPATH=/home/manu/vjepa2 python root/evals/autoregressive_rollout.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt \
+    --data_dir /nas/manu --t_ctx 4 --batch_size 32 --gpu 0
+```
+
 ## Open Questions
 -
