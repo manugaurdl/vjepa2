@@ -1,5 +1,6 @@
 *.html
 .claude/
+docs/plan_multi_horizon.md
 inference.ipynb
 .venv
 wandb/
