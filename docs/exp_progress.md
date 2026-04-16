@@ -355,5 +355,49 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/autoregressive_rollout.py \
     --data_dir /nas/manu --t_ctx 4 --batch_size 32 --gpu 0
 ```
 
+### 2026-04-09 — Multi-horizon linear probe (evalID: `multi_horizon_probe`) first results
+
+New eval: closed-form ridge regression `state_t @ W_k ≈ x_{t+k}` for k=1..4 on SSv2, fit in parallel with raw-DINO probe `x_t @ W_k_raw ≈ x_{t+k}`. The gap is exactly "what the encoder contributes to horizon k on top of linearly projecting the current frame forward." Eval documented in `docs/repo_context.md` → "Multi-Horizon Linear Probe." Motivation: the AR rollout eval (2026-04-08) collapsed past k=1, but that eval is architecturally degenerate for this surprise-update RNN (feeding prediction back gives `error=0`). B1 sidesteps the rollout mechanics and probes the state directly.
+
+**`2ldiw9xk` — RNN CLS, pred only, DINO space** (`pred_in_dino_space_2ldiw9xk/last.pt`)
+
+| k | copy    | raw-DINO | state   | raw−state gap | state/copy | state/raw |
+|---|---------|----------|---------|---------------|-----------|-----------|
+| 1 |  632.25 |  562.14  |  524.04 |  38.10        | 0.829x    | 0.932x    |
+| 2 |  925.29 |  779.61  |  730.24 |  49.37        | 0.789x    | 0.937x    |
+| 3 | 1123.09 |  912.61  |  860.37 |  52.25        | 0.766x    | 0.943x    |
+| 4 | 1238.34 |  986.79  |  935.96 |  50.84        | 0.756x    | 0.948x    |
+
+State beats both copy and raw-DINO probe at every horizon. The `raw − state` gap stays ~40–55 across k — the state consistently carries multi-step information beyond what's linearly in the current frame. Small gap in absolute terms, but consistent and in the right direction.
+
+**Interpretation.** Combined with the AR rollout collapse: the **state is fine**, the rollout *mechanism* is the bottleneck. The information needed for 2–4 step prediction is present in `state_t` and linearly decodable; the problem is that iterating `w_pred` on its own output doesn't trace a trajectory through that state space. This argues for A1 (explicit forward/transition model `f(state) → next_state`, DreamerV3-style) over A2 (multi-horizon heads) — you don't need to re-learn the information, you need a rollout operator that actually exists.
+
+**`e6esmgmu` — RNN Patches, pred only, DINO space** (`patch_pred_dino_space_e6esmgmu/last.pt`)
+
+Token-wise probe: shared `W: 384×384` fit across all 256 spatial positions.
+
+| k | copy    | raw-DINO | state   | raw−state gap | state/copy | state/raw |
+|---|---------|----------|---------|---------------|-----------|-----------|
+| 1 | 1124.58 |  919.75  |  866.98 |  52.77        | 0.771x    | 0.943x    |
+| 2 | 1524.97 | 1160.65  | 1100.17 |  60.49        | 0.721x    | 0.948x    |
+| 3 | 1755.22 | 1279.83  | 1220.04 |  59.78        | 0.695x    | 0.953x    |
+| 4 | 1875.01 | 1336.61  | 1279.79 |  56.83        | 0.683x    | 0.957x    |
+
+Same shape as CLS: state beats both copy and raw-DINO at every horizon, with `raw − state` gap ~50–60. The patch model encodes a little more per-token information beyond current frame than CLS does (in absolute L2), but the *relative* gap (`state/raw` ~0.95) is nearly identical to CLS. The per-patch temporal signal is real but modest — consistent with the static_dynamic result that most of the improvement lives in a small dynamic-patch minority.
+
+**Joint takeaway (CLS + patches).** Both models pass B1: the state is a strict improvement over raw DINO for multi-step prediction. Combined with the AR rollout collapse at k≥2, this pins the failure mode on the rollout mechanism, not on the state's information content. Clear motivation for A1 (explicit forward/transition operator) ahead of A2 (multi-horizon decode heads).
+
+Reproduce:
+```bash
+# CLS
+PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
+    --checkpoint /nas/manu/vjepa2/outputs/pred_in_dino_space_2ldiw9xk/last.pt \
+    --data_dir /nas/manu --max_horizon 4 --batch_size 128 --gpu 0
+# Patches
+PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt \
+    --data_dir /nas/manu --max_horizon 4 --batch_size 32 --gpu 0
+```
+
 ## Open Questions
 -

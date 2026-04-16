@@ -84,7 +84,13 @@ def main():
 
     # Load cached val features
     use_patches = getattr(model_args, "use_patch_tokens", False)
-    suffix = "_patches" if use_patches else ""
+    meanpool_patches = getattr(model_args, "meanpool_patches", False)
+    if meanpool_patches:
+        suffix = "_meanpool"
+    elif use_patches:
+        suffix = "_patches"
+    else:
+        suffix = ""
     dino_name = model_args.dino_model.split("_")[-1]
     feat_path = os.path.join(args.data_dir, "ssv2/dino_feats", dino_name, f"validation{suffix}.pt")
     print(f"Loading features from {feat_path}")

@@ -81,6 +81,7 @@ Full commands in `docs/repo_context.md`. Brief summary:
 | `static_dynamic` | `root/evals/static_dynamic_decomposition.py` | Is improvement over copy concentrated on dynamic patches? (patches only) |
 | `ood_decay` | `eval_transfer.py --mode decay` | Does pred_error_l2 curve generalize to OOD data? (tbd) |
 | `autoregressive_rollout` | `root/evals/autoregressive_rollout.py` | Does model extrapolate dynamics or collapse to constant? Iterates `w_pred` on its own output from a partial-context state, compares per-horizon L2 vs copy/linear baselines. RNN + DINO-space only. |
+| `multi_horizon_probe` | `root/evals/multi_horizon_probe.py` | Does the frozen state linearly decode to multi-step futures? Closed-form ridge regression `state_t → x_{t+k}` for k=1..K, compared against raw-DINO probe `x_t → x_{t+k}` and copy baseline. Tests the state, not the decoder. Any RNN checkpoint (learned-space or DINO-space). |
 
 ---
 

@@ -1,4 +1,5 @@
 *.html
+.claude/
 inference.ipynb
 .venv
 wandb/

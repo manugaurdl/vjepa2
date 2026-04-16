@@ -88,6 +88,28 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/autoregressive_rollout.py \
 - Context length `t_ctx` must be ≥ 2 (linear baseline needs the last two observed frames to estimate velocity). Default 4 gives K = 4 rollout steps for the standard 8-frame SSv2 clips.
 - Interpretation: model < copy at horizon k ⇒ extrapolating. model ≥ copy ⇒ collapsed to constant / behaving like a smoother. The copy curve is exactly what an EMA rolled out autoregressively would produce (it has nothing to integrate once frames stop coming, so it sits at the data's drift floor).
 
+## Eval: Multi-Horizon Linear Probe (evalID: `multi_horizon_probe`)
+
+Tests whether the RNN state `state_t` carries multi-step future information *beyond* what the current frame `x_t` trivially encodes. Fits closed-form ridge regression `state_t @ W_k ≈ x_{t+k}` for k=1..K on SSv2 train, evals per-horizon L2 on SSv2 val. Fits a parallel raw-DINO probe `x_t @ W_k_raw ≈ x_{t+k}` as the reference; the gap `raw - state` is exactly the encoder's multi-step contribution on top of linearly projecting the current frame forward.
+
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
+    --checkpoint /nas/manu/vjepa2/outputs/<run_name>/last.pt \
+    --data_dir /nas/manu --max_horizon 4 --batch_size 128 --gpu 0
+```
+
+- **RNN-only.** Causal transformer support not wired up in v1 (encoder.outs has the same shape semantics — would slot in identically).
+- Works for CLS (S=1), patches (S=256), and meanpool-patch (S=1). For patches, one shared `W: D×D` is fit across all 256 spatial positions — token-wise, matching `w_pred`'s inductive bias. Cannot capture cross-patch motion (would need `(S·D)×(S·D)` ≈ 9B params).
+- Learned-space and DINO-space checkpoints both supported: the linear probe subsumes any final projection.
+- No SGD, no epochs, no tuned hyperparameters — one pass over train to accumulate `XtX`/`XtY` in fp64, one solve, one pass over val. Only knob is `--ridge_lambda` (relative: `reg = λ · trace(XtX) / D`, default 1e-3).
+- Per-horizon error is sum-over-D L2 (same unit as Tables 2/3). Patch models: further averaged over S tokens per sample (matches `static_dynamic_decomposition.py` convention).
+- `t` ranges over `1..T-k-1`: t=0 is skipped because state starts from zeros, so `state_0` is trivially empty.
+- Use `--train_limit` for smoke tests (e.g. `--train_limit 2000` runs in ~1 min).
+- Interpretation:
+  - `state_probe < raw_probe` at all k → encoder put real multi-step info in the state beyond the current frame.
+  - `state_probe ≈ raw_probe` → state ≈ current frame, no extra temporal signal.
+  - `state_probe ≥ copy` → state encodes nothing useful (broken/noise).
+
 ## Key model internals
 
 - `pred_error_l2`: stored on `model.pred_error_l2` after forward pass, shape `(B, T, S)` where S=256 for patches, S=1 for CLS. Computed as `(h - w_pred(state))^2.sum(dim=-1)` in `GatedTransformerCore.forward()` (`root/models/rnn.py:198-199`).
