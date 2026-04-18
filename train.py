@@ -68,6 +68,22 @@ def _get_pred_error_l2(model: torch.nn.Module):
     return pred_error_l2
 
 
+def _get_multi_horizon_errors(model: torch.nn.Module):
+    m = model.module if isinstance(model, DistributedDataParallel) else model
+    return getattr(m, "multi_horizon_errors", None)
+
+
+def _resolve_horizon_weights(args):
+    max_horizon = int(getattr(args.encoder.rnn, "max_horizon", 1))
+    weights = getattr(args.encoder.rnn, "horizon_weights", None)
+    if weights is None:
+        weights = [1.0 / max_horizon] * max_horizon
+    assert len(weights) == max_horizon, (
+        f"horizon_weights length {len(weights)} != max_horizon {max_horizon}"
+    )
+    return max_horizon, weights
+
+
 
 @torch.no_grad()
 def run_ood_eval(model, ood_loader, device, ssv2_pred_error_l2, is_master):
@@ -116,6 +132,8 @@ def run_validation(
     ce_loss_sum = torch.tensor(0.0, device=device)
     pred_loss_sum = torch.tensor(0.0, device=device)
     pred_loss_weight = getattr(args.encoder.rnn, "pred_loss_weight", 0.0)
+    max_horizon, horizon_weights = _resolve_horizon_weights(args)
+    per_horizon_sums = [torch.tensor(0.0, device=device) for _ in range(max_horizon)]
 
     for batch in tqdm(utils._iter_batches(loader), total=len(loader), desc=f"Validating epoch {epoch}"):
         clips = batch.clips
@@ -129,11 +147,15 @@ def run_validation(
         if getattr(args, "action_classification", True):
             ce_loss_sum += F.cross_entropy(logits, y, reduction="sum")
         if getattr(args, "next_frame_pred", True):
-            pred_error_l2 = _get_pred_error_l2(model)
-            if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
-                pred_loss = pred_error_l2[:, 1:].mean(dim=(-1, -2))
-                pred_loss_sum += pred_loss.sum()
-        
+            mh = _get_multi_horizon_errors(model)
+            if mh is not None and len(mh) > 0:
+                # per-sample mean over (T-k, S); sum over batch to match total-division below.
+                per_horizon_sample_means = [err.mean(dim=(-1, -2)) for err in mh]
+                for k_idx, samp in enumerate(per_horizon_sample_means):
+                    per_horizon_sums[k_idx] += samp.sum()
+                weighted = sum(w * samp for w, samp in zip(horizon_weights, per_horizon_sample_means))
+                pred_loss_sum += weighted.sum()
+
         total += float(y.numel())
         if getattr(args, "action_classification", True):
             pred = logits.argmax(dim=1)
@@ -153,10 +175,13 @@ def run_validation(
         dist.all_reduce(total, op=dist.ReduceOp.SUM)
         dist.all_reduce(ce_loss_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(pred_loss_sum, op=dist.ReduceOp.SUM)
+        for s in per_horizon_sums:
+            dist.all_reduce(s, op=dist.ReduceOp.SUM)
 
     acc = (correct / total.clamp_min(1.0)).item()
     mean_ce_loss = (ce_loss_sum / total.clamp_min(1.0)).item()
     mean_pred_loss = (pred_loss_sum / total.clamp_min(1.0)).item()
+    per_horizon_means = [(s / total.clamp_min(1.0)).item() for s in per_horizon_sums]
     if getattr(args, "action_classification", True):
         mean_total_loss = ((ce_loss_sum + pred_loss_sum * pred_loss_weight) / total.clamp_min(1.0)).item()
     else:
@@ -194,12 +219,17 @@ def run_validation(
             )
 
     if is_master and wandb.run:
+        per_horizon_log = {
+            f"eval/pred_loss_k{k_idx + 1}": v
+            for k_idx, v in enumerate(per_horizon_means)
+        }
         wandb.log({
             "eval/loss": mean_total_loss,
             "eval/total_loss": mean_total_loss,
             "eval/ce_loss": mean_ce_loss,
             "eval/pred_loss": mean_pred_loss,
             "eval/acc": acc,
+            **per_horizon_log,
             **dynamics_logs,
         }, step=int(global_vars["global_step"]))
     
@@ -300,14 +330,17 @@ def main(args) -> None:
             if model.cache_dino_feats:
                 continue
             pred_loss_weight = getattr(args.encoder.rnn, "pred_loss_weight", 0.0)
+            max_horizon, horizon_weights = _resolve_horizon_weights(args)
             ce_loss = torch.tensor(0.0, device=device)
             pred_loss = torch.tensor(0.0, device=device)
+            per_horizon_scalars = None
             if getattr(args, "action_classification", True):
                 ce_loss = F.cross_entropy(logits, y)
             if getattr(args, "next_frame_pred", True):
-                pred_error_l2 = _get_pred_error_l2(model)
-                if pred_error_l2 is not None and pred_error_l2.size(1) > 1:
-                    pred_loss = pred_error_l2[:, 1:].mean()
+                mh = _get_multi_horizon_errors(model)
+                if mh is not None and len(mh) > 0:
+                    per_horizon_scalars = [err.mean() for err in mh]
+                    pred_loss = sum(w * s for w, s in zip(horizon_weights, per_horizon_scalars))
             if getattr(args, "action_classification", True):
                 total_loss = ce_loss + pred_loss_weight * pred_loss
             else:
@@ -332,11 +365,12 @@ def main(args) -> None:
             it_time.update((time.time() - t0) * 1000.0)
 
             if is_master and args.wandb.logging:
-                # logger.info(
-                #     f"epoch={epoch} step={global_step} "
-                #     f"loss={loss_meter.avg:.4f} iter_ms={it_time.avg:.1f} "
-                #     f"bs={args.batch_size} world={world_size}"
-                # )
+                per_horizon_log = {}
+                if per_horizon_scalars is not None:
+                    per_horizon_log = {
+                        f"trainer/pred_loss_k{k_idx + 1}": s.detach().item()
+                        for k_idx, s in enumerate(per_horizon_scalars)
+                    }
                 wandb.log({
                     "trainer/epoch": epoch,
                     "trainer/step": global_vars["global_step"],
@@ -346,6 +380,7 @@ def main(args) -> None:
                     "trainer/pred_loss": pred_loss_meter.avg,
                     "trainer/lr": optimizer.param_groups[0]["lr"],
                     "trainer/iter_ms_avg": it_time.avg,
+                    **per_horizon_log,
                 }, step=global_vars["global_step"])
 
             if (global_vars["global_step"]+1) % args.val_freq == 0:

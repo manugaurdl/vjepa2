@@ -58,6 +58,8 @@ encoder:
     pred_loss_weight: 0.01
     predict_in_dino_space: false
     pred_hidden_dim: 384
+    max_horizon: 1
+    horizon_weights: null
   causal_transformer:
     depth: 4
     n_heads: 8

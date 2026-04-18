@@ -1,7 +1,7 @@
 """
 Causal transformer for next-frame prediction.
 Processes all frames in parallel with causal attention mask.
-Returns same 6-tuple interface as VideoRNNTransformerEncoder.
+Returns same 7-tuple interface as VideoRNNTransformerEncoder (last element always None; no multi-horizon).
 """
 
 import torch
@@ -46,7 +46,7 @@ class CausalTransformerPredictor(nn.Module):
     def forward(self, x, state=None, return_all=True):
         """
         x: (B, T, D) for CLS or (B, T, S, D) for patches
-        Returns same 6-tuple as VideoRNNTransformerEncoder.
+        Returns 7-tuple matching VideoRNNTransformerEncoder (last element is None).
         """
         squeeze_tokens = False
         if x.ndim == 3:
@@ -100,4 +100,4 @@ class CausalTransformerPredictor(nn.Module):
         update_norms = torch.zeros(B, T, device=x.device)
         r_novelty = torch.zeros(B, T, device=x.device)
 
-        return outs, final_state, update_gates, update_norms, r_novelty, pred_error_l2
+        return outs, final_state, update_gates, update_norms, r_novelty, pred_error_l2, None

@@ -126,8 +126,10 @@ class DinoFrameEncoder(nn.Module):
 
         if self.encoder_type in ("rnn", "causal_transformer"):
             
-            hidden_states, final_state, timesteps_update_gate, timesteps_update_norm, timesteps_r_novelty, pred_error_l2 = frame_feats ### hidden_states[:,-1] == final_state
+            (hidden_states, final_state, timesteps_update_gate, timesteps_update_norm,
+             timesteps_r_novelty, pred_error_l2, multi_horizon_errors) = frame_feats ### hidden_states[:,-1] == final_state
             self.pred_error_l2 = pred_error_l2
+            self.multi_horizon_errors = multi_horizon_errors
 
             if (not self.training) and getattr(self, "collect_update_gates", False):
                 self.update_gates[ds_index] = timesteps_update_gate.detach().cpu()

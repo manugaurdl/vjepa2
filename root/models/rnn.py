@@ -147,13 +147,14 @@ class GatedTransformerCore(nn.Module):
     GRU-like gating around a cross-attention transformer.
     Inputs and state are sequences of tokens: (B, S, D).
     """
-    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False, predict_in_dino_space: bool = False, pred_hidden_dim: int = None):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = False, predict_in_dino_space: bool = False, pred_hidden_dim: int = None, max_horizon: int = 1):
         super().__init__()
         mlp_dim = (4 * dim) if mlp_dim is None else mlp_dim
         pred_hidden_dim = pred_hidden_dim or dim
 
         self.decay_state = decay_state # default = False i.e state not decayed
         self.update_type = update_type
+        self.max_horizon = max_horizon
         self.state_ln = nn.LayerNorm(dim, eps=1e-6)
 
         if self.update_type == "gru":
@@ -165,6 +166,12 @@ class GatedTransformerCore(nn.Module):
             self.w_precision = nn.Linear(dim, dim, bias=False)
             self.w_pred = MLP(dim, dim, hidden_dim=pred_hidden_dim)
             self.encoder = nn.Identity() if predict_in_dino_space else nn.Linear(dim, dim, bias=False)
+            # k=2..K extra heads — only used for multi-horizon loss, not for state update.
+            # Empty ModuleList when max_horizon=1 preserves state-dict keys for back-compat.
+            self.w_pred_extra = nn.ModuleList([
+                MLP(dim, dim, hidden_dim=pred_hidden_dim)
+                for _ in range(max_horizon - 1)
+            ])
 
         # self.transformer = CrossAttentionTransformer(
         #     num_layers=num_layers, dim=dim, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim
@@ -232,10 +239,10 @@ class VideoRNNTransformerEncoder(nn.Module):
         else last_output: (B, D) or (B, S, D)
       - final_state: (B, 1, D) or (B, S, D)
     """
-    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True, predict_in_dino_space: bool = False, pred_hidden_dim: int = None):
+    def __init__(self, dim: int, update_type: str, num_layers: int = 4, num_heads: int = 8, mlp_dim: int = None, cross_attn_dim: int=None, decay_state: bool = True, predict_in_dino_space: bool = False, pred_hidden_dim: int = None, max_horizon: int = 1):
         super().__init__()
         self.core = GatedTransformerCore(
-            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state, predict_in_dino_space=predict_in_dino_space, pred_hidden_dim=pred_hidden_dim
+            dim=dim, update_type=update_type, num_layers=num_layers, num_heads=num_heads, mlp_dim=mlp_dim, cross_attn_dim=cross_attn_dim, decay_state=decay_state, predict_in_dino_space=predict_in_dino_space, pred_hidden_dim=pred_hidden_dim, max_horizon=max_horizon
         )
 
     def forward(self, x, state=None, return_all: bool = True):
@@ -249,7 +256,7 @@ class VideoRNNTransformerEncoder(nn.Module):
         B, T, S, D = x.shape
         if state is None:
             state = torch.zeros((B, S, D), device=x.device, dtype=x.dtype)
- 
+
         outs = []
         timesteps_update_gate = []
         timesteps_update_norm = []
@@ -266,6 +273,21 @@ class VideoRNNTransformerEncoder(nn.Module):
 
         outs = torch.stack(outs, dim=1)  # (B,T,S,D)
 
+        multi_horizon_errors = None
+        if self.core.update_type == "surprise":
+            h_all = self.core.encoder(x)  # (B,T,S,D). Identity when predict_in_dino_space=True.
+            heads = [self.core.w_pred] + list(self.core.w_pred_extra)
+            multi_horizon_errors = []
+            for k_idx, head in enumerate(heads):
+                k = k_idx + 1
+                if k >= T:
+                    break
+                states_for_k = outs[:, :T - k]    # (B, T-k, S, D): state_t for t=0..T-k-1
+                targets_k = h_all[:, k:]          # (B, T-k, S, D): x_{t+k}
+                preds_k = head(states_for_k)      # (B, T-k, S, D)
+                err_k = ((preds_k - targets_k) ** 2).sum(dim=-1)  # (B, T-k, S)
+                multi_horizon_errors.append(err_k)
+
         if squeeze_tokens:
             outs = outs.squeeze(2)   # (B,T,D)
             state = state.squeeze(1) # (B,D)
@@ -279,7 +301,7 @@ class VideoRNNTransformerEncoder(nn.Module):
             pred_error_l2 = None
             if timesteps_pred_error_l2:
                 pred_error_l2 = torch.stack(timesteps_pred_error_l2, dim=1)  # (B,T,S)
-            return outs, state, update_gates, update_norms, r_novelty, pred_error_l2  
+            return outs, state, update_gates, update_norms, r_novelty, pred_error_l2, multi_horizon_errors
 
         else:
             return outs[:, -1], state,

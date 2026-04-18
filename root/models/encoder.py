@@ -79,7 +79,7 @@ def build_encoder(encoder_cfg: Any, *, input_dim: int) -> Tuple[nn.Module, int]:
         out_dim = encoder.out_dim
     elif enc_type == "rnn":
         rnn_cfg = encoder_cfg.rnn
-        encoder = VideoRNNTransformerEncoder(dim=rnn_cfg.hidden_dim, update_type=rnn_cfg.update_type, num_layers=rnn_cfg.depth, num_heads=8, mlp_dim=4*rnn_cfg.hidden_dim, cross_attn_dim=rnn_cfg.cross_attn_dim, decay_state=rnn_cfg.decay_state, predict_in_dino_space=getattr(rnn_cfg, "predict_in_dino_space", False), pred_hidden_dim=getattr(rnn_cfg, "pred_hidden_dim", None))
+        encoder = VideoRNNTransformerEncoder(dim=rnn_cfg.hidden_dim, update_type=rnn_cfg.update_type, num_layers=rnn_cfg.depth, num_heads=8, mlp_dim=4*rnn_cfg.hidden_dim, cross_attn_dim=rnn_cfg.cross_attn_dim, decay_state=rnn_cfg.decay_state, predict_in_dino_space=getattr(rnn_cfg, "predict_in_dino_space", False), pred_hidden_dim=getattr(rnn_cfg, "pred_hidden_dim", None), max_horizon=getattr(rnn_cfg, "max_horizon", 1))
         out_dim = rnn_cfg.hidden_dim
     elif enc_type == "causal_transformer":
         ct_cfg = encoder_cfg.causal_transformer
