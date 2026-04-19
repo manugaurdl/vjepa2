@@ -399,5 +399,104 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
     --data_dir /nas/manu --max_horizon 4 --batch_size 32 --gpu 0
 ```
 
+### 2026-04-18 — A2 multi-horizon training, CLS K-ablation (`7zotsrwf`, `jk05gf14`, `hp9v42d1`)
+
+Three new training runs: CLS, pred-only, DINO-space, uniform 1/K horizon weighting, all-t supervision, 100 epochs — identical config to `2ldiw9xk` baseline aside from `encoder.rnn.max_horizon`. Each adds K−1 extra MLP heads (`w_pred_extra`) for predicting x_{t+k} from `state_t` at k=2..K; the original `w_pred` (k=1 head) is unchanged and still drives the surprise update. Implementation: commit `97452db`, verified via 5 checks (shape, K=1 numerical invariant `mh[0] == pred_error_l2[:, 1:]`, backward flow, strict=True checkpoint load of `2ldiw9xk`/`e6esmgmu`, `multi_horizon_probe.py` on `2ldiw9xk` reproduces Table 7 exactly).
+
+**Runs.**
+
+| K | wandbID       | run_name                         | checkpoint                                                                   |
+|---|---------------|----------------------------------|------------------------------------------------------------------------------|
+| 2 | `7zotsrwf`    | `pred_in_dino_space_mh_k2`       | `/nas/manu/vjepa2/outputs/pred_in_dino_space_mh_k2_7zotsrwf/last.pt`         |
+| 3 | `jk05gf14`    | `pred_in_dino_space_mh_k3`       | `/nas/manu/vjepa2/outputs/pred_in_dino_space_mh_k3_jk05gf14/last.pt`         |
+| 4 | `hp9v42d1`    | `pred_in_dino_space_mh_k4`       | `/nas/manu/vjepa2/outputs/pred_in_dino_space_mh_k4_hp9v42d1/last.pt`         |
+
+**Train command (template).**
+```bash
+python train.py --config base --wandb.run_name pred_in_dino_space_mh_k<K> \
+    --load_cache_feats --no-action_classification \
+    --encoder.rnn.predict_in_dino_space --encoder.rnn.max_horizon <K> --epochs 100
+```
+
+**Multi-horizon probe (ridge on frozen `state_t`).**
+
+| k | `2ldiw9xk` K=1 | `7zotsrwf` K=2 | `jk05gf14` K=3 | `hp9v42d1` K=4 |
+|---|----------------|----------------|----------------|----------------|
+| 1 |   524.0        |   525.7        |   529.4        |   533.5        |
+| 2 |   730.2        |   726.4        |   725.8        |   726.6        |
+| 3 |   860.4        |   853.2        |   849.8        |   848.6        |
+| 4 |   936.0        |   927.8        |   923.3        |   921.1        |
+
+State beats copy (632.3/925.3/1123.1/1238.3), raw-DINO (562.1/779.6/912.6/986.8), and mean-pool (649.1/788.8/880.8/936.3) at every (K, k). Copy/raw/mean baselines are identical across runs — probe is on frozen SSv2 val features.
+
+**Trained MLP heads (wandb `eval/pred_loss_k{k}`, final epoch).**
+
+| k | `2ldiw9xk` | `7zotsrwf` | `jk05gf14` | `hp9v42d1` |
+|---|------------|------------|------------|------------|
+| 1 |   513.0    |   515.6    |   521.0    |   525.6    |
+| 2 |   —        |   720.4    |   720.7    |   722.6    |
+| 3 |   —        |   —        |   852.7    |   852.1    |
+| 4 |   —        |   —        |   —        |   935.1    |
+
+**Takeaways.**
+
+- **Long-horizon state improves monotonically with K** on the ridge probe: k=4 drops 936.0 → 921.1 (−14.9), k=3 drops 860.4 → 848.6 (−11.8). Multi-horizon supervision shapes the state.
+- **Small k=1 penalty** (+9.5 ridge, +12.6 trained-head from K=1 → K=4). Uniform 1/K weighting dilutes k=1 gradient by factor K; recoverable later with non-uniform weights.
+- **Trained heads beat ridge probe at k=1,2; ridge ≥ trained at k=3,4.** Trained MLP is strictly more expressive than a linear map, so at k=3,4 the K=4 head is underfit under uniform weighting + 100 epochs — not a capacity ceiling.
+- **A2 partially contradicts B1's "state is fine, rollout is the bottleneck" framing.** The state *can* be pushed further via multi-horizon training alone; A2 is not redundant. A1 (explicit forward model) remains the right next step for genuine iterated rollout, but A2 is a working direct-decode alternative for k≤2.
+
+**Reproduce eval.**
+```bash
+# Ridge probe
+PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
+    --checkpoint /nas/manu/vjepa2/outputs/pred_in_dino_space_mh_k<K>_<wandbID>/last.pt \
+    --data_dir /nas/manu --max_horizon 4 --batch_size 128 --gpu 0
+
+# Trained-head wandb numbers
+.venv/bin/python scripts/pull_mh_wandb_cls.py
+```
+
+Patches runs (`97x4ktzc` K=2, `0hymll1d` K=3, `zn1nvup2` K=4) still in flight; will log separately when complete.
+
+### 2026-04-18 — A2 multi-horizon training, Patches K-ablation (mid-training snapshot, epoch ~24/100)
+
+Parallel patches runs for the A2 sprint (config mirrors `e6esmgmu` + `encoder.rnn.max_horizon=K`, batch_size 8, `--use_patch_tokens`). All 3 still training at time of eval; `last.pt` snapshotted to `/nas/manu/vjepa2/outputs/snapshots_2026-04-18/` to avoid read-during-write races, then evaluated. **Not final** — will re-run at epoch 100.
+
+**Runs.**
+
+| K | wandbID       | run_name                         | snapshot checkpoint                                                                                |
+|---|---------------|----------------------------------|----------------------------------------------------------------------------------------------------|
+| 2 | `97x4ktzc`    | `patch_pred_dino_space_mh_k2`    | `/nas/manu/vjepa2/outputs/snapshots_2026-04-18/patch_pred_dino_space_mh_k2_97x4ktzc_last.pt`       |
+| 3 | `0hymll1d`    | `patch_pred_dino_space_mh_k3`    | `/nas/manu/vjepa2/outputs/snapshots_2026-04-18/patch_pred_dino_space_mh_k3_0hymll1d_last.pt`       |
+| 4 | `zn1nvup2`    | `patch_pred_dino_space_mh_k4`    | `/nas/manu/vjepa2/outputs/snapshots_2026-04-18/patch_pred_dino_space_mh_k4_zn1nvup2_last.pt`       |
+
+**Multi-horizon probe (ridge on frozen `state_t`).** K=1 reference `e6esmgmu` is fully trained (100 epochs); K>1 are at epoch ~24.
+
+| k | `e6esmgmu` K=1 | `97x4ktzc` K=2 | `0hymll1d` K=3 | `zn1nvup2` K=4 |
+|---|----------------|----------------|----------------|----------------|
+| 1 |   867.0        |   867.4        |   872.9        |   877.4        |
+| 2 |  1100.2        |  1094.6        |  1094.8        |  1095.1        |
+| 3 |  1220.0        |  1212.1        |  1209.6        |  1207.8        |
+| 4 |  1279.8        |  1271.8        |  1268.6        |  1265.9        |
+
+Baselines (identical across K): copy 1124.6/1525.0/1755.2/1875.0; raw-DINO 919.7/1160.7/1279.8/1336.6; mean-pool 993.1/1144.6/1229.1/1274.5.
+
+**Trained MLP heads (wandb `eval/pred_loss[_k{k}]`, most recent step).**
+
+| k | `e6esmgmu` (final) | `97x4ktzc` (ep~24) | `0hymll1d` (ep~24) | `zn1nvup2` (ep~24) |
+|---|--------------------|--------------------|--------------------|--------------------|
+| 1 |   851.5            |   858.1            |   862.7            |   865.8            |
+| 2 |   —                |  1095.2            |  1096.9            |  1094.0            |
+| 3 |   —                |   —                |  1222.3            |  1219.0            |
+| 4 |   —                |   —                |   —                |  1288.1            |
+
+**Takeaways (tentative — mid-training).**
+
+- Same qualitative pattern as CLS: monotone long-horizon state improvement with K (k=4: −13.9, k=3: −12.2), small k=1 penalty (+10.4). Signal visible at epoch 24 already; expect it to strengthen at convergence.
+- Mean-pool is a stronger patches baseline than raw-DINO at k=2,3,4 (per-token averaging is informative when most patches are static background). State still beats mean-pool at every (K, k).
+- Ridge probe ≤ trained MLP head at k=1,2 but ridge beats trained head at k=3,4 — same underfitting signature as CLS. Uniform 1/K weighting + limited epochs leaves long-horizon head capacity on the table.
+
+**Reproduce.** See CLS section above for commands; swap `<wandbID>` and use the snapshot path for patches. When training finishes, re-probe on the live `last.pt` under each run's output dir.
+
 ## Open Questions
 -

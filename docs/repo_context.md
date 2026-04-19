@@ -110,6 +110,28 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
   - `state_probe ≈ raw_probe` → state ≈ current frame, no extra temporal signal.
   - `state_probe ≥ copy` → state encodes nothing useful (broken/noise).
 
+## Training: Multi-horizon prediction heads (A2)
+
+Trains the RNN to predict `x_{t+k}` for k=1..K from `state_t` via K separate MLP heads — the k=1 head (`w_pred`) still drives the surprise update; heads for k=2..K (`w_pred_extra: ModuleList`) only contribute to the loss. Loss is the uniform-weighted sum `(1/K)·Σ_k ||w_pred_k(state_t) − x_{t+k}||²` averaged over all valid (t, k) pairs. Config: `encoder.rnn.max_horizon: K` (default 1 → identical to prior behavior, bit-for-bit); `encoder.rnn.horizon_weights: null` (uniform) or list of length K.
+
+```bash
+# CLS
+python train.py --config base --wandb.run_name pred_in_dino_space_mh_k<K> \
+    --load_cache_feats --no-action_classification \
+    --encoder.rnn.predict_in_dino_space --encoder.rnn.max_horizon <K> --epochs 100
+
+# Patches (batch_size 8 due to S=256)
+python train.py --config base --wandb.run_name patch_pred_dino_space_mh_k<K> \
+    --load_cache_feats --use_patch_tokens --no-action_classification \
+    --encoder.rnn.predict_in_dino_space --encoder.rnn.max_horizon <K> \
+    --batch_size 8 --val_batch_size 8 --epochs 100
+```
+
+- `max_horizon=1` path is bit-identical to pre-A2 code (verified via strict=True checkpoint load of `2ldiw9xk`/`e6esmgmu` + reproducing Table 7). Old K=1 checkpoints load into the new model with no migration.
+- Training returns 7-tuple from `VideoRNNTransformerEncoder.forward`: `(hidden_states, final_state, gate, update_norm, r_novelty, pred_error_l2, multi_horizon_errors)`. `multi_horizon_errors` is a list of length K with per-horizon (B, T−k, S) L2 tensors; `pred_error_l2` is unchanged (k=1 signal). Causal transformer returns `None` for the 7th element.
+- Per-horizon val metrics logged as `eval/pred_loss_k{1..K}`; summed weighted scalar still as `eval/pred_loss` so existing dashboards don't break. Train-side `trainer/pred_loss_k{1..K}` added symmetrically.
+- Evaluate trained checkpoints via `multi_horizon_probe` above (ridge probe on frozen state — measures state informativeness) and by pulling `eval/pred_loss_k{k}` from wandb (measures the trained MLP head). See `scripts/pull_mh_wandb_{cls,patches}.py`.
+
 ## Key model internals
 
 - `pred_error_l2`: stored on `model.pred_error_l2` after forward pass, shape `(B, T, S)` where S=256 for patches, S=1 for CLS. Computed as `(h - w_pred(state))^2.sum(dim=-1)` in `GatedTransformerCore.forward()` (`root/models/rnn.py:198-199`).

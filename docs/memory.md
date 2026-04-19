@@ -90,11 +90,17 @@ Full commands in `docs/repo_context.md`. Brief summary:
 | wandbID | Description | Checkpoint |
 |---------|-------------|------------|
 | `zyvsy8gk` | RNN, CE+pred, CLS, learned space | `update=w(error)_L2weight1e-1_zyvsy8gk/best.pt` |
-| `2ldiw9xk` | RNN, pred only, CLS, DINO space | `pred_in_dino_space_2ldiw9xk/last.pt` |
-| `e6esmgmu` | RNN, pred only, patches, DINO space | `patch_pred_dino_space_e6esmgmu/last.pt` |
+| `2ldiw9xk` | RNN, pred only, CLS, DINO space (A2 K=1 baseline) | `pred_in_dino_space_2ldiw9xk/last.pt` |
+| `e6esmgmu` | RNN, pred only, patches, DINO space (A2 K=1 baseline) | `patch_pred_dino_space_e6esmgmu/last.pt` |
 | `tj9x820q` | RNN, CE+pred, patches, learned space | `patch_ce_pred_tj9x820q/best.pt` |
 | `ud2ncxlq` | Causal Transformer, pred only, CLS, DINO space | `causal_pred_cls_ud2ncxlq/last.pt` |
 | `r55x2lcn` | Causal Transformer, pred only, patches, DINO space | `causal_pred_patches_r55x2lcn/last.pt` (check) |
+| `7zotsrwf` | RNN, pred only, CLS, DINO space, multi-horizon K=2 | `pred_in_dino_space_mh_k2_7zotsrwf/last.pt` |
+| `jk05gf14` | RNN, pred only, CLS, DINO space, multi-horizon K=3 | `pred_in_dino_space_mh_k3_jk05gf14/last.pt` |
+| `hp9v42d1` | RNN, pred only, CLS, DINO space, multi-horizon K=4 | `pred_in_dino_space_mh_k4_hp9v42d1/last.pt` |
+| `97x4ktzc` | RNN, pred only, patches, DINO space, multi-horizon K=2 (training) | `patch_pred_dino_space_mh_k2_97x4ktzc/last.pt` |
+| `0hymll1d` | RNN, pred only, patches, DINO space, multi-horizon K=3 (training) | `patch_pred_dino_space_mh_k3_0hymll1d/last.pt` |
+| `zn1nvup2` | RNN, pred only, patches, DINO space, multi-horizon K=4 (training) | `patch_pred_dino_space_mh_k4_zn1nvup2/last.pt` |
 
 Full training configs and results in `docs/exp_progress.md`.
 
