@@ -590,5 +590,44 @@ bash scripts/repro/mlp_probe_tier1.sh    # launches CLS (GPU 0) + patches (GPU 1
 
 Logs: `outputs/mlp_probe_tier1/{2ldiw9xk,e6esmgmu}.log`.
 
+### 2026-04-20 — MLP probe (evalID: `mlp_probe`) — Patches Tier 1
+
+Same hyperparameters and implementation as the CLS Tier 1 run above (residual MLP with ridge warm-start + frozen skip; `--mlp_hidden 1024 --mlp_layers 2 --epochs 20 --lr 3e-4 --weight_decay 1e-4 --patience 5 --seed 0 --batch_size 32`). Per-token probe: one shared MLP across 256 spatial positions, matching the ridge convention.
+
+**Patches — `e6esmgmu`** (`patch_pred_dino_space_e6esmgmu/last.pt`)
+
+Training wall-clock: warm-start ridge accumulator pass ≈ 3.5 h (dominated by fp64 3072×3072 matmul on 5279 batches), MLP training ≈ 2 h. All probes early-stopped by epoch ~15 of 20.
+
+| k | ridge(state) | mlp(state) | Δstate | ridge(hist) | mlp(hist) | Δhist | Δhist % |
+|---|--------------|------------|--------|-------------|-----------|-------|---------|
+| 1 | 867.0        | 848.7      |  18.3  | 868.9       | 847.3     | 21.6  | **2.49%** |
+| 2 | 1100.2       | 1075.6     |  24.6  | 1093.8      | 1072.3    | 21.5  | **1.96%** |
+| 3 | 1220.0       | 1192.3     |  27.7  | 1208.5      | 1187.3    | 21.2  | **1.75%** |
+| 4 | 1279.8       | 1252.3     |  27.5  | 1269.8      | 1248.2    | 21.6  | **1.70%** |
+
+Sanity gate: `mlp(hist, k=1) = 847.3 ≤ ridge(hist, k=1) = 868.9` ✓.
+
+**Decision: Possibility 2 for patches (weakly).** Δhist is 1.70-2.49%, crossing the ≥2% Poss 2 threshold at k=1 and sitting in the ambiguous 1-2% band for k=2,3,4. Our 2-layer MLP finds nonlinear structure in raw patch DINO concat that ridge misses — in contrast to CLS, where Δhist was 0.60-0.66% (clean Poss 1).
+
+**Patches vs CLS — why they differ.** Patches preserve per-token spatial features. Local motion / object dynamics can show up as conditional, position-dependent patterns that a linear map cannot express but a 2-layer ReLU/GELU MLP can. CLS is a single aggregated semantic vector per frame — any such nonlinear spatial patterns are averaged out before the probe ever sees them, leaving only globally-linear structure.
+
+**Δstate ≈ Δhist** across k. The RNN state (K=1 trained) has captured essentially the same nonlinear content a fresh MLP-on-concat finds. Consistent with the earlier reading that K=1 training already surfaces most linearly-accessible multi-step info.
+
+**Combined CLS + Patches picture.**
+- CLS: linear AR ≈ nonlinear MLP ≈ our RNN state. Pinpointed ceiling. Poss 1.
+- Patches: nonlinear MLP beats ridge by ~2%. Real structure; our K=1 state is within noise of it; the data has more.
+- Token type matters a lot for whether nonlinear probing helps. The 2-layer 1024-hidden MLP isn't at the true nonlinear ceiling on patches; a bigger probe (Tier 3 capacity ablation) could widen the gap further and quantify the headroom.
+
+**Sharp follow-up now motivated.** On the A2 K=4 patches run (`zn1nvup2`, once it finishes training): compute `mlp_probe` with the same hyperparameters. If A2 K=4 state beats `mlp(hist)` on patches by more than 2% at k≥2, multi-horizon supervision is genuinely pushing the state past the nonlinear-MLP-on-concat ceiling. If A2 state ≈ `mlp(hist)`, A2's K=4 gain is just matching what a fresh MLP probe already extracts. Current A2 K=4 patches snapshot (epoch ~24) ridge-probe gave state = 1265.9 at k=4; `mlp(hist, k=4) = 1248.2`, so the snapshot is ~1.4% ABOVE `mlp(hist)`. Final converged number is the one to read.
+
+**Tier 2 / Tier 3 decision.** Patches Δhist at 1.70-2.49% is marginal. A capacity ablation (Tier 3 — 3 MLP sizes at k=4 on patches) would tighten whether the true ceiling is meaningfully below ridge or just barely. Tier 2 (MLP on `last` / `meanpool`) would tell us where the nonlinear gain lives (single-frame appearance vs aggregation vs ordered history). Both worthwhile on patches; skip for CLS (clear Poss 1).
+
+**Run command**:
+```bash
+bash scripts/repro/mlp_probe_tier1.sh    # launches CLS (GPU 0) + patches (GPU 1)
+```
+
+Logs: `outputs/mlp_probe_tier1/{2ldiw9xk,e6esmgmu}.log`.
+
 ## Open Questions
 -

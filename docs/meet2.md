@@ -159,8 +159,6 @@ At k=1, α≈1 (predict ~x_t itself); at k=4, α≈0.4 (predict mostly the mean,
 
 To execute this interpolation, the predictor needs `x_t` at its true magnitude — the contribution `α·x_t` only has the right scale if the input has the right scale. The probe is literally weighting "how much of x_t to keep" vs "how much to fall back to the mean," and that weighting is calibrated against the input's actual norm.
 
-
-
 **What LN destroys.** `state ← LN(state + update)` re-normalizes to unit variance every step. After LN, every state vector has the same magnitude — only direction differs. So the probe can no longer distinguish "this is a high-energy frame, scale prediction up" from "this is a low-energy frame, scale prediction down." It outputs a fixed-magnitude prediction regardless. Two videos with the same direction but very different energies get the same forecast, even though their real `x_{t+k}` differ in magnitude.
 
 **Why this hurts more at long horizons than short.** At k=1, scale matters less because the optimal prediction is dominated by direction (state ≈ next frame's direction). At k=4, the optimal prediction is mostly μ plus a small magnitude-aware correction — and that magnitude-aware correction is exactly what LN has wiped out. `lin_reg_history` keeps raw concat untouched, so it can apply the right α-shrink per video; the state can't.
@@ -216,6 +214,8 @@ Future:
 
 Ran on `2ldiw9xk` (evalID `mlp_probe`). Design: residual MLP (linear skip + zero-init GELU nonlinear branch). Skip warm-started to the closed-form ridge solution and **frozen** during SGD — so the nonlinear branch only needs to find residual corrections on top of ridge. Guarantees final val ≤ ridge (nonlinear can stay at 0), so "MLP ≈ ridge" cannot be confused with under-fit.
 
+ **Δhist > 0** means the raw 8-frame DINO features, by themselves, contain nonlinear temporal structure that a linear map can't extract
+
 **Table 3 — CLS (**`2ldiw9xk`**)**
 
 
@@ -231,11 +231,78 @@ Ran on `2ldiw9xk` (evalID `mlp_probe`). Design: residual MLP (linear skip + zero
 
 Δstate ≈ Δhist across k: whatever small nonlinear signal the MLP finds in the raw concat is also accessible from the RNN state. Consistent with "state is a lossless substrate + data has negligible extractable nonlinear structure."
 
-Patches result pending. If patches agrees with CLS, the combined reading is: on this data + encoder, linear AR is the ceiling (not a probe-class artifact). The 8× lossless compression + multi-horizon transfer from k=1 supervision is as strong a result as can be expected without changing the data or the encoder. A1 remains motivated by the need for a rollout mechanism over the compact state; A2's headroom is bounded by the linear-AR ceiling itself, which is now pinned.
+### MLP probe Tier 1 — Patches result (2026-04-20)
 
-Full numbers and hyperparameters: `docs/exp_progress.md` → 2026-04-19 MLP probe entry.
+Ran on `e6esmgmu` (same design and hyperparameters as CLS). Per-token probe with one shared MLP across 256 spatial positions.
+
+**Table 4 — Patches (`e6esmgmu`)**
+
+
+| k   | ridge(state) | mlp(state) | Δstate | ridge(hist) | mlp(hist) | Δhist | Δhist %   |
+| --- | ------------ | ---------- | ------ | ----------- | --------- | ----- | --------- |
+| 1   | 867.0        | 848.7      | 18.3   | 868.9       | 847.3     | 21.6  | **2.49%** |
+| 2   | 1100.2       | 1075.6     | 24.6   | 1093.8      | 1072.3    | 21.5  | **1.96%** |
+| 3   | 1220.0       | 1192.3     | 27.7   | 1208.5      | 1187.3    | 21.2  | **1.75%** |
+| 4   | 1279.8       | 1252.3     | 27.5   | 1269.8      | 1248.2    | 21.6  | **1.70%** |
+
+
+Linear probe gets most of the info out; MLP probe achieves ~1-2% improvement - it could just be better static-token predictor
+
+### Combined CLS + Patches reading
+
+
+|                      | CLS `2ldiw9xk`         | Patches `e6esmgmu`     |
+| -------------------- | ---------------------- | ---------------------- |
+| Δhist range across k | 0.60–0.66%             | 1.70–2.49%             |
+| Decision             | Possibility 1          | Possibility 2 (weak)   |
+| Token aggregation    | single semantic vector | 256 per-spatial tokens |
+
+
+The two results are consistent with an encoder-side story, not a data-side one: **the same raw DINO frames have extractable nonlinear structure that survives in patches but is linearly-summarized away in the CLS token.**
+
+**A1 / A2 implications:**
+
+- The linear-AR-ish ceiling was pinned within ~1% on CLS but can be exceeded by ~2% on patches with a nonlinear probe.
+- A2 K=4 CLS state sits within 1% of all ceilings — A2 training buys something but bounded tightly.
+- On patches, A2 K=4 state (still training; current ridge-probe snapshot at k=4 = 1265.9) is 1.4% ABOVE the MLP-on-hist ceiling of 1248.2 — still headroom. Re-running MLP probe on the converged A2 K=4 patches checkpoint (`zn1nvup2` `last.pt` after epoch 100) will tell us whether multi-horizon supervision on patches can cross the MLP-on-concat ceiling.
+
+**Tier 2 / 3 decision.** Patches Δhist at 1.7–2.5% is marginal relative to our MLP capacity. A Tier 3 capacity ablation (3 MLP sizes, k=4 on patches) would tighten the true nonlinear ceiling; Tier 2 (MLP on `last` / `meanpool`) would localize where the nonlinear gain lives (single-frame vs unordered aggregation vs ordered history). Both worthwhile for patches; skip for CLS (clear Poss 1).
+
+Full numbers and hyperparameters: `docs/exp_progress.md` → 2026-04-19 / 2026-04-20 MLP probe entries.
+
+## Are we at the upper-bound of multi-horizon prediction performance for SSV2 DINO?
+
+**Short answer:** for CLS, yes — A2 is already at the ceiling. For patches, maybe 1-2% headroom, but probably not worth chasing.
+
+**CLS math (k=4):**
+
+- K=1 state: 936.0
+- Linear-AR ceiling (ridge on concat_history): 929.9
+- MLP ceiling (on concat_history): 924.3
+- A2 K=4 state: **921.1** ← already at/below MLP ceiling
+- Total headroom above K=1 ≈ 1.3%; A2 K=4 already captured ~1.6%. Further K sweeps, loss weighting, horizon embeddings = chasing <0.5% sub-noise gains. **Not worth the compute.**
+
+**Patches math (k=4):**
+
+- K=1 state: 1279.8
+- MLP ceiling (on concat_history): 1248.2
+- A2 K=4 state (ep ~24): 1265.9 ← still 1.4% above MLP ceiling
+- Two problems with banking on this headroom:
+  1. The 1.7% MLP-over-ridge gap itself is suspect — likely static-token appearance modeling, not temporal dynamics. 
+
+**Bigger picture:** We're near the upper bound of what SSv2 + frozen DINO can support for k=1..4 prediction. `copy_last → state` already **captures the bulk (~25% L2 reduction);** 
+
+### Real gains require changing the substrate, not refining A2:
+
+- Features with temporal awareness (DINO is single-frame).
+- Task with richer dynamics than SSv2's short clips (*NEED NON-LINEARITY DATA IN ORDER TO MODEL IT*)
+- Architectures that can exploit genuine nonlinearity
+
+**Immediate next step before burning more A2 cycles:** run Tier 2 `MLP(last)` on patches. If Δ(MLP(last) − ridge(last)) ≈ Δhist, the patches ceiling is a static-appearance artifact and A2 has no real headroom — pivot off A2.
 
 ---
+
+#### doesn't make sense now, but went into multi-horizon training rabbit hole, confounding variables to ablate, training decisions... will help later :)
 
 ## A2 (train with multi-horizon heads)
 
@@ -378,4 +445,73 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
 # Pull trained-head numbers
 .venv/bin/python scripts/pull_mh_wandb_patches.py
 ```
+
+---
+
+## Where do we stand? 
+
+- Need new multi-horizon prediction benchmark?
+  - need proxy eval for stage 2, since i.e the point of stage 1
+- how good are we at next-frame prediction (patches)
+  - sigreg
+  - dinoWM
+- Recurrent update
+  - explore if we lag behind causal transformer
+- Multimodality
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
