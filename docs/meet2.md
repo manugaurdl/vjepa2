@@ -1,4 +1,4 @@
-### Multi-horizon probe eval
+### * Multi-horizon probe eval
 
 - Given batch size = 32, T=8, dim = : the encoder spits outs (32, 8, D) - lets consider CLS for simplicity
 
@@ -288,7 +288,7 @@ Full numbers and hyperparameters: `docs/exp_progress.md` → 2026-04-19 / 2026-0
 - MLP ceiling (on concat_history): 1248.2
 - A2 K=4 state (ep ~24): 1265.9 ← still 1.4% above MLP ceiling
 - Two problems with banking on this headroom:
-  1. The 1.7% MLP-over-ridge gap itself is suspect — likely static-token appearance modeling, not temporal dynamics. 
+  1. The 1.7% MLP-over-ridge gap itself is suspect — likely static-token appearance modeling, not temporal dynamics.
 
 **Bigger picture:** We're near the upper bound of what SSv2 + frozen DINO can support for k=1..4 prediction. `copy_last → state` already **captures the bulk (~25% L2 reduction);** 
 
@@ -304,214 +304,148 @@ Full numbers and hyperparameters: `docs/exp_progress.md` → 2026-04-19 / 2026-0
 
 #### doesn't make sense now, but went into multi-horizon training rabbit hole, confounding variables to ablate, training decisions... will help later :)
 
-## A2 (train with multi-horizon heads)
-
-**HYPOTHESIS**:  multi-horizon prediction can be an impossible task for some cases (i.e for certain videos or for certain horizons). its possible sometimes that the video frames encoded so far may not always have information required to accurately predict over k=3 horizon.
-
-**k-decay weighting**. So, maybe we should weigh each loss depending upon how far it is (weights for k = 1>2>3...)
-
-**context for long-horizon prediction**. Also, maybe it is better to do long-horizon prediction, only if the model has encoded atleast 3 frames (can ablate over how many frames to encode before multi-horizon prediction kicks in), because to predict long-horizon the model needs to understand dynamics, and to understand dynamics it needs to ingest atleast two distinct frames
-
-**VERIFYING HYPOTHESIS**: *state - last*  i.e stays ~5% at every horizon. If k=3,4 were systematically unlearnable, we'd expect the gap to collapse to ~0 at high k. It doesn't. This is a hint that the state carries comparable info for all k — arguing against k-decay weighting.
-
-**NOTE**: right now, everything is terrible. once our predictor is good, then maybe can check this.
-
-### To Do: verify this hypothesis via experiment
-
-**ABLATIONS to run:**
-
-1. one MLP + horizon embedding conditioning added to state
-
-Inductive bias.
-
-- separate MLP says: "horizons are totally separate tasks; each head does its own thing."
-- this says: "horizons are the same task parameterized by k; predict-5-ahead should share structure with predict-4-ahead."
-
-If DINO dynamics are smooth in k (the k=3 prediction should look like k=2's prediction moved slightly forward in time), B's smoothness prior is a win. If horizons really are different regimes (e.g., k=1 is local denoising, k=4 is scene-level prior), A lets each head specialize without gradient interference. 
-
-1. supervision:
-  1. all -t : predict all future frames.
-
-## A2: K-ablation results — CLS
-
-**Setup.** Train `w_pred_k` heads (separate MLP per k, k=1..K) with uniform 1/K weighting, all-t supervision, DINO-space, pred-only, 100 epochs. Identical config to `2ldiw9xk` (K=1 CLS baseline) aside from `encoder.rnn.max_horizon`. Runs: K=1 `2ldiw9xk` (baseline), K=2 `7zotsrwf`, K=3 `jk05gf14`, K=4 `hp9v42d1`. Patches runs still in flight.
-
-**Evaluation 1: closed-form ridge probe on frozen `state_t`** (eval unchanged from B1 — this measures how *informative* the state is about x_{t+k}, regardless of the MLP head). Baselines are identical across K because they only depend on the SSv2 val features.
-
-**Table 4**
-
-
-| k   | copy_last | last  | meanpool | state K=1 (`2ldiw9xk`) | state K=2 (`7zotsrwf`) | state K=3 (`jk05gf14`) | state K=4 (`hp9v42d1`) |
-| --- | --------- | ----- | -------- | ---------------------- | ---------------------- | ---------------------- | ---------------------- |
-| 1   | 632.3     | 562.1 | 649.1    | 524.0                  | 525.7                  | 529.4                  | 533.5                  |
-| 2   | 925.3     | 779.6 | 788.8    | 730.2                  | 726.4                  | 725.8                  | 726.6                  |
-| 3   | 1123.1    | 912.6 | 880.8    | 860.4                  | 853.2                  | 849.8                  | 848.6                  |
-| 4   | 1238.3    | 986.8 | 936.3    | 936.0                  | 927.8                  | 923.3                  | 921.1                  |
-
-
-when linear probing, 
-
-- meanpooling frames until T beats a linear regressor of DINO (for k>=2)
-- for a given k ; do they train only with a single K head  or upto K heads
-
-**Evaluation 2: trained MLP heads** (wandb `eval/pred_loss_k{k}` at end of training — what the model actually learned to output).
-
-**Table 4**
-
-
-| k   | K=1 (`2ldiw9xk`) | K=2 (`7zotsrwf`) | K=3 (`jk05gf14`) | K=4 (`hp9v42d1`) |
-| --- | ---------------- | ---------------- | ---------------- | ---------------- |
-| 1   | 513.0            | 515.6            | 521.0            | 525.6            |
-| 2   | —                | 720.4            | 720.7            | 722.6            |
-| 3   | —                | —                | 852.7            | 852.1            |
-| 4   | —                | —                | —                | 935.1            |
-
-
-**Takeaways.**
-
-1. **Long-horizon state improves monotonically with K** (ridge probe). At k=4, state loss drops from 936.0 (K=1) → 921.1 (K=4), a 14.9 absolute improvement. At k=3, 860.4 → 848.6 (−11.8). Multi-horizon supervision shapes `state_t` to carry more k≥2 information — exactly the intended effect.
-2. **Small k=1 penalty** (+9.5 from K=1 to K=4 on the ridge probe; +12.6 on the trained head). Uniform 1/K weighting dilutes the k=1 gradient by a factor of K, so k=1 gets less supervision in higher-K runs. Cheap to recover later with non-uniform weights if needed — not a dealbreaker.
-3. **Trained heads beat the ridge probe at short horizons, saturate at long horizons.** k=1: trained head 513–526 vs. ridge 524–534 (trained wins by ~10). k=2: trained 720.4–722.6 vs. ridge 725.8–730.2 (trained wins by ~5). k=3: trained 852.1 vs. ridge 848.6 (ridge wins by ~4). k=4: trained 935.1 vs. ridge 921.1 (ridge wins by ~14). An MLP is strictly more expressive than a linear map, so ridge ≤ MLP with infinite data. At k=3,4 the ridge probe already matches or beats the trained head — suggesting the K=4 head is underfit at long horizons under uniform weighting + 100 epochs.
-4. **State beats every baseline at every horizon for every K.** Even the weakest row (K=1 state at k=4: 936.0) essentially ties meanpool (936.3) and clearly beats last (986.8) and copy_last (1238.3). Monotone improvement over K strengthens this.
-
-**Punchline vs. B1.** B1's framing was that the failure was in the rollout mechanism, not the state, and A2 would be "redundant." A2 partially contradicts B1: the state *can* be pushed further — the K=4 training run improves long-horizon state informativeness by ~1.5% (k=4) without any rollout changes. The trained heads are a cheap, working alternative to iterated `w_pred` for k≤2; at k≥3 they're at parity with the closed-form probe, suggesting diminishing returns from MLP expressivity alone under this training regime. A1 (explicit forward model) is still the right next step for genuine rollout, but A2 is not a dead end — the state moved.
-
-**Reproduce (CLS).**
-
-```bash
-# Train (per-K, on one GPU; 100 epochs pred-only)
-python train.py --config base --wandb.run_name pred_in_dino_space_mh_k<K> \
-    --load_cache_feats --no-action_classification \
-    --encoder.rnn.predict_in_dino_space --encoder.rnn.max_horizon <K> --epochs 100
-
-# Evaluate (ridge probe on frozen state)
-PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
-    --checkpoint /nas/manu/vjepa2/outputs/pred_in_dino_space_mh_k<K>_<wandbID>/last.pt \
-    --data_dir /nas/manu --max_horizon 4 --batch_size 128 --gpu 0
-
-# Pull trained-head numbers
-.venv/bin/python scripts/pull_mh_wandb_cls.py
-```
-
-## A2: K-ablation results — Patches (mid-training snapshot)
-
-**Caveat.** Patches K∈{2,3,4} runs (`97x4ktzc`, `0hymll1d`, `zn1nvup2`) are still training — snapshot at **epoch ~24/100** (copied from `last.pt` to `/nas/manu/vjepa2/outputs/snapshots_2026-04-18/`). K=1 reference (`e6esmgmu`) is fully trained (100 epochs). Not apples-to-apples; expect the K>1 numbers to improve further at convergence.
-
-**Evaluation 1: closed-form ridge probe on frozen `state_t`.**
-
-
-| k   | copy_last | last   | meanpool | state K=1 (`e6esmgmu`) | state K=2 (`97x4ktzc`) | state K=3 (`0hymll1d`) | state K=4 (`zn1nvup2`) |
-| --- | --------- | ------ | -------- | ---------------------- | ---------------------- | ---------------------- | ---------------------- |
-| 1   | 1124.6    | 919.7  | 993.1    | 867.0                  | 867.4                  | 872.9                  | 877.4                  |
-| 2   | 1525.0    | 1160.7 | 1144.6   | 1100.2                 | 1094.6                 | 1094.8                 | 1095.1                 |
-| 3   | 1755.2    | 1279.8 | 1229.1   | 1220.0                 | 1212.1                 | 1209.6                 | 1207.8                 |
-| 4   | 1875.0    | 1336.6 | 1274.5   | 1279.8                 | 1271.8                 | 1268.6                 | 1265.9                 |
-
-
-**Evaluation 2: trained MLP heads** (wandb `eval/pred_loss[_k{k}]`, most recent step).
-
-
-| k   | K=1 (`e6esmgmu`) | K=2 (`97x4ktzc`) | K=3 (`0hymll1d`) | K=4 (`zn1nvup2`) |
-| --- | ---------------- | ---------------- | ---------------- | ---------------- |
-| 1   | 851.5 (final)    | 858.1 (ep~24)    | 862.7 (ep~24)    | 865.8 (ep~24)    |
-| 2   | —                | 1095.2           | 1096.9           | 1094.0           |
-| 3   | —                | —                | 1222.3           | 1219.0           |
-| 4   | —                | —                | —                | 1288.1           |
-
-
-**Takeaways (tentative, mid-training).**
-
-1. **Same qualitative pattern as CLS, earlier in training.** Long-horizon state improves monotonically with K on the ridge probe: k=4 drops 1279.8 → 1265.9 (−13.9), k=3 drops 1220.0 → 1207.8 (−12.2). Small k=1 penalty (+10.4). Signal is already visible at epoch 24; expect it to strengthen by epoch 100.
-2. **Meanpool is a stronger baseline for patches** than for CLS. Meanpool beats last at k=2,3,4 (raw−mean gaps of −16, −51, −62). Per-token temporal averaging is informative for patches because most patches barely move (static background) — averaging is essentially a better prior. State still beats meanpool at every horizon.
-3. **Trained patch heads at k=1 degrade slightly with K** (851.5 → 865.8) — same 1/K-dilution effect as CLS. At k≥2 they're tight across K (within ~3).
-4. **Ridge probe still below trained head at k=3,4** just like CLS: ridge 1207.8 vs. trained 1219.0 (k=3); ridge 1265.9 vs. trained 1288.1 (k=4). MLP is underfit at long horizons — consistent with CLS finding that 1/K weighting + 100 epochs isn't enough head capacity at long k.
-
-**Next.** Re-run probe eval on the patches `last.pt` after the 3 runs finish training (epoch 100) to get the converged comparison. Expect gaps to widen — K=4 should pull further below K=1 at k=3,4.
-
-**Reproduce (patches).**
-
-```bash
-# Train (per-K; patches use batch_size 8 due to S=256)
-python train.py --config base --wandb.run_name patch_pred_dino_space_mh_k<K> \
-    --load_cache_feats --use_patch_tokens --no-action_classification \
-    --encoder.rnn.predict_in_dino_space --encoder.rnn.max_horizon <K> \
-    --batch_size 8 --val_batch_size 8 --epochs 100
-
-# Evaluate (ridge probe on frozen state)
-PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
-    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_mh_k<K>_<wandbID>/last.pt \
-    --data_dir /nas/manu --max_horizon 4 --batch_size 32 --gpu 0
-
-# Pull trained-head numbers
-.venv/bin/python scripts/pull_mh_wandb_patches.py
-```
+A2 (train with multi-horizon heads) section moved to `docs/A2_multi_horizon_training.md`.
 
 ---
 
-## Where do we stand? 
+### Where do we stand:  SSv2-8f with DINO is saturated
+
+### Potential directions
 
 - Need new multi-horizon prediction benchmark?
   - need proxy eval for stage 2, since i.e the point of stage 1
 - how good are we at next-frame prediction (patches)
   - sigreg
   - dinoWM
-- Recurrent update
+- Recurrent update - more expressive update, TTT
   - explore if we lag behind causal transformer
-- Multimodality
+- Modelling multimodal futures
+
+## Next hill to climb?
+
+right now, we want to improve stage 1 encoder. To do that, we need benchmarks that show where/what the RNN encoder lacks. 
+
+### Three different tangents to improve stage 1 encoder:
+
+1. Evaluate RNN compression for stage 2 (build stage 2 eval; maybe compression is already good enough).
+2. Improve stage 1 encoder (T=64, TTT, capacity, aux losses).
+3. Close RNN-vs-transformer gap on patch prediction.
 
 
 
+There are two things we care about **spatio-temporal compression** in stage 1:
+
+- should capture first-order dynamics; needed to predict nearby future frames / model scene-flow
+- should capture semantics; needed for long-horizon forecasting 
+
+# 1. Stage 2 proxy benchmark
+
+**Stage-2 proxy benchmark = same multi-horizon probe, one hierarchy up:**
 
 
+| axis    | stage 1 (done)    | stage 2 (new)                                                          |
+| ------- | ----------------- | ---------------------------------------------------------------------- |
+| unit    | frame             | chunk (8 frames → 1 state)                                             |
+| k       | 1..4 frames       | 1..8 chunks (~4s each)                                                 |
+| horizon | ≤3s               | ~30s–few min                                                           |
+| data    | SSv2 (2-6s clips) | Epic-Kitchens-100 or COIN (multi-stage, 10-20min)                      |
+| metric  | per-frame L2      | per-chunk L2 + **ratio: stage2(states) / stage2(uncompressed concat)** |
 
 
+- multiple decision - what dataset, metric, unit. 
+- lets make task progressively harder -->  we stick to our existing evaluation setup i.e frame prediction evaluated with per-frame L2 but increasing the context length. 
+- Currently, our RNN state matches linear regressor over concat(x_0, ...,x_t) baseline at SSV2 8 frames. ***what about 64 frames?***   
+- **BASELINE**: lets get a baseline that really outperfroms our RNN state so that hillclimbing that metric will lead to better RNN state
 
+### Increasing horizon vs context
 
+- as horizon increases, cov(x_t, x_{t+k}) reduces, and prediction --> conditional mean
+- to do really long horizon prediction, you need to operate at higher temporal abstraction.
+- recurrence trained with next few-frame prediciton can minimize spatio-temporal redundancy. its not enough to operate at higher temporal abstraction. for that, we will have to train autoregressive transformer that operates a chunk levels. 
+- to get to that, lets first get as much juice as possible from the recurrent state - long context, as lossless compression, meaningful compression that enables great long horizon chunk-level prediction (for stage 2).
 
+### Widening ***state-vs-baseline gaps.***
 
+#### Long-horizon prediction (K=3,4) may require more context
 
+- right now we evaluate, **All-t, no warmup.** multi_horizon_[probe.py](http://probe.py) evaluates anchors t=1..T−k−1. For qk=4, T=8 → t ∈ {1,2,3}: **sometimes the state has seen only 2 frames before predicting 4 ahead**
+- those low-t large-k samples contribute to the average, likely dragging it down. Gating to t ≥ k (or t ≥ 3) would be a cleaner eval and ***might slightly widen state-vs-baseline gaps.***
 
+#### train on longer videos.
 
+- Training on 32-64 frame sequences at the same 384-dim state forces harder compression; hard to outperform W(concat) baseline.
+- the alternative (increasing horizon i.e longer k) is dominated by mean-regression as I argued earlier.
 
+## Evaluating long-horizon dynamics
 
+### **the stage-2 setup itself measures how good RNN compression is**++ ; requires operating at higher abstraction
 
+#### Short horizon (k=1..4 frames, ~1s):
 
+- next frame ≈ current frame + small motion. 
+- Local velocity/finite-differences dominate the prediction.
 
+**GOAL**: *Can we get a compressed spatio-temporal chunk that preserves semantic information necessary for long horizon prediction?*
 
+#### Long horizon (chunk k=4, ~16s ahead)
 
+- motion decorrelates completely. 
+- What actually predicts chunk_{t+4} is "*what activity is this*" and "*what stage of the activity are we in*"
+- **semantic/categorical info, not kinematic**. 
+- A k=1-trained encoder has no pressure to encode such priors; a long-horizon or contrastive objective does.
 
+### Chunk-level forecasting --> semantics / higher abstraction
 
+1. Take long videos (Epic-Kitchens / COIN).
+  1. Slice into 8-frame chunks.
+  2. Stage-1 RNN on each chunk → one 384-dim state per chunk.
+  3. Train a causal transformer over the chunk-state sequence to predict future chunk features.
+  4. Baseline: same transformer, but tokens are raw chunk-DINO (3072-dim per chunk).
+  5. Gap between them = compression loss. Climb it by improving stage-1 (state dim, arch, aux losses, K).
+    **No frame-level gymnastics needed — the stage-2 setup itself measures how good RNN compression is**++
 
+*The test asks*: whatever the RNN throws away during that 8→1 compression actually needed for predicting future chunks? 
 
+- If concat-baseline beats state-baseline, yes — something useful got discarded. 
+- Same question as stage 1, just evaluated at the scale where stage 2 will use it.
 
+#### Q: Is the goal to improve stage-1 encoders, or to qualify stage 1 for stage 2? These are separate metrics.\
 
+# 3. Close RNN-causal transformer gap on patches
 
+outperforming causal transformer baseline for patch tokens (table 3 in @docs/[meet1.md](http://meet1.md)) can be one goal, need to find out how much of the improvement is from static tokens compared to dynamic tokens - need to add causal transformer column in table 6 in meet1.md?
 
+#### Q: doin static vs patch decomposition on multi-horizon probe? - a lossy way to find how much of the win is temporal?
 
+### RNN vs Causal Transformer — decoder and encoder expressivity
 
+**Decoder answer: no, not matched.**
 
+- **RNN decoder (`w_pred`):** 2-layer MLP, `Linear(384→384) → ReLU → Linear(384→384)`. ~295K params. Defined in `root/models/rnn.py:132-143, 167`.
+- **Causal transformer decoder (`pred_head`):** single `Linear(384→384)` + a LayerNorm. ~148K params. Defined in `root/models/causal_transformer.py:28-29, 70`.
 
+So the transformer has a *less* expressive decoder and still wins on patches — if anything this strengthens the "transformer encoder is carrying more info" reading, not weakens it. But it means any "trained head" cross-arch comparison (e.g., Table 3 trained-head column) is not apples-to-apples on the decoder axis. The ridge probe sidesteps this entirely — that's one more reason it's the cleaner comparison.
 
+**Encoder expressivity: not matched — the transformer has ~15× more parameters.**
 
+RNN update machinery (`GatedTransformerCore`, surprise mode):
 
+- `w_precision`: 384×384 linear (~148K)
+- `w_pred`: 2-layer MLP (~295K)
+- `encoder`: `Identity` in DINO-space mode
+- One LN
+- Total ≈ 440K trainable params, applied recurrently T=8 times with a single 384-D state.
 
+Causal transformer (`CausalTransformerPredictor`, defaults `depth=4, n_heads=8, d_ff=4*dim`):
 
+- 4 × `TransformerEncoderLayer`: each ≈ 4×(384²) attention + 2×(384×1536) FFN ≈ 1.77M params
+- Frame/patch embeddings, `pred_head`, LN: negligible
+- Total ≈ 7.1M trainable params, single forward pass over 8 frames with full attention over 2048 patch tokens.
 
+So the 62-L2 patches gap (851 vs 789) is confounded: 15× params, full cross-token attention, and bigger "state" (the full token sequence vs a single 384-D vector) all differ simultaneously. "The RNN encoder is weaker" is one explanation; "the RNN has much less capacity" is another, and currently we can't distinguish them.
 
+If you want a fair comparison, you'd scale up either:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- RNN: wider `w_pred` MLP (`pred_hidden_dim` config), deeper MLP, bigger state dim, or cross-patch attention in the update.
+- Transformer: fewer layers / smaller d_ff to match ~500K params.
 

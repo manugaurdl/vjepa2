@@ -629,5 +629,32 @@ bash scripts/repro/mlp_probe_tier1.sh    # launches CLS (GPU 0) + patches (GPU 1
 
 Logs: `outputs/mlp_probe_tier1/{2ldiw9xk,e6esmgmu}.log`.
 
+### 2026-04-20 — Static/Dynamic decomposition on Causal Transformer patches (`r55x2lcn`)
+
+Extended Table 6 in `docs/meet1.md` to include a causal transformer row so the patch RNN-vs-transformer gap (62 L2 total from Table 3) can be split into dynamic vs static contributions. Ran `root/evals/static_dynamic_decomposition.py` unchanged — the script reads `model.pred_error_l2`, which `CausalTransformerPredictor` already exposes in the same `(B, T, S)` format as the RNN (`root/models/causal_transformer.py:82-88`; `root/models/model.py:127-131` sets the attribute identically for both encoder types).
+
+**Table 6 (extended).** Copy baselines are data-only (identical to the `e6esmgmu` row).
+
+| Group            | Copy   | RNN (`e6esmgmu`)  | Causal Transformer (`r55x2lcn`) |
+|------------------|--------|-------------------|---------------------------------|
+| Dynamic patches  | 1430.6 | 1077.0 (**24.7%**) | 984.6 (**31.2%**)              |
+| Static patches   | 746.9  | 625.9 (**16.2%**) | 592.6 (**20.7%**)              |
+
+Dynamic-only copy shuffle ratio (data property, unchanged): 1.40x.
+
+**Interpretation.**
+- Both archs show the same dynamic-bias ratio (RNN 1.52x, Transformer 1.51x) — neither is uniquely motion-aware; both lift dynamic patches proportionally more than static.
+- Transformer's absolute gap over RNN: dynamic Δ = 92.4 L2, static Δ = 33.3 L2. ≈73% of the total patch gap lives on dynamic patches. Improving RNN's dynamic-patch modeling is the higher-leverage lever for closing Table 3.
+- Caveat: the 62-L2 patch gap in Table 3 is confounded by capacity (transformer ≈ 7.1M vs RNN ≈ 440K params) and by cross-token attention. Static/dynamic split diagnoses *where* the gap is, not *why*. See `docs/meet2.md` "RNN vs Causal Transformer — decoder and encoder expressivity" for the architectural audit.
+
+**Reproduce.**
+```bash
+PYTHONPATH=/home/manu/vjepa2 python root/evals/static_dynamic_decomposition.py \
+    --checkpoint /nas/manu/vjepa2/outputs/causal_pred_patches_r55x2lcn/last.pt \
+    --data_dir /nas/manu --batch_size 32 --gpu 0
+```
+
+Log: `outputs/static_dynamic_r55x2lcn.log`.
+
 ## Open Questions
 -

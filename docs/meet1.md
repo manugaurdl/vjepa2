@@ -309,18 +309,21 @@ Also: copy shuffle ratio on dynamic patches only — originally framed as "if cl
 
 Script: `root/evals/static_dynamic_decomposition.py`
 
-**Results** (`e6esmgmu`, pred only, patches, DINO space):
+**Results** (pred only, patches, DINO space):
 
 table 6:
 
 
-|                 | Copy Baseline | Model  | Improvement |
-| --------------- | ------------- | ------ | ----------- |
-| Dynamic patches | 1430.6        | 1077.0 | **24.7%**   |
-| Static patches  | 746.9         | 625.9  | **16.2%**   |
+|                 | Copy Baseline | RNN (`e6esmgmu`)   | Causal Transformer (`r55x2lcn`) |
+| --------------- | ------------- | ------------------ | ------------------------------- |
+| Dynamic patches | 1430.6        | 1077.0 (**24.7%**) | 984.6 (**31.2%**)               |
+| Static patches  | 746.9         | 625.9 (**16.2%**)  | 592.6 (**20.7%**)               |
 
 
-- Improvement concentrated on dynamic patches (1.5x ratio) → model learned dynamics, not just smoothing.
+- **Transformer wins on both axes.** Dynamic gap = 92.4 L2 (1077.0 → 984.6), static gap = 33.3 L2 (625.9 → 592.6). ≈73% of the transformer's 62-L2 total patch win (Table 3) lives on dynamic patches.
+- **Same dynamic-bias ratio across archs** (RNN 24.7/16.2 ≈ 1.52x; Transformer 31.2/20.7 ≈ 1.51x). Neither model is uniquely motion-aware — both concentrate their gains on dynamic patches proportionally. The transformer is just uniformly ~28% better on top.
+- **Stage 1 lever:** improving the RNN's dynamic-patch modeling is where the leverage is. Static-patch performance is close (~5% relative gap); dynamic is where ~3× as much L2 is on the table.
+- **Caveat:** this diagnoses *where* the RNN lags, not *why*. Transformer has ~15× more params (≈7.1M vs ≈440K) + full cross-token attention over 2048 past patch tokens, so capacity and architecture are confounded. See `docs/meet2.md` "RNN vs Causal Transformer — decoder and encoder expressivity" for the audit.
 - `tj9x820q` **(CE + pred, patches, learned space)**: model error dynamic = 4.2, static = 3.0  Dynamic patches harder to predict even in learned space  (can't have copy baseline in latent space)
 
 ### Dynamic-only copy shuffle ratio for patches= **1.40x** (CLS comparison dropped — corrected CLS copy ratio is 1.65x, not 11.2x)
