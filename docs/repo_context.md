@@ -90,7 +90,7 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/autoregressive_rollout.py \
 
 ## Eval: Multi-Horizon Linear Probe (evalID: `multi_horizon_probe`)
 
-Tests whether the RNN state `state_t` carries multi-step future information *beyond* what the current frame `x_t` trivially encodes. Fits closed-form ridge regression `state_t @ W_k ≈ x_{t+k}` for k=1..K on SSv2 train, evals per-horizon L2 on SSv2 val. Fits a parallel raw-DINO probe `x_t @ W_k_raw ≈ x_{t+k}` as the reference; the gap `raw - state` is exactly the encoder's multi-step contribution on top of linearly projecting the current frame forward.
+Tests whether the RNN state `state_t` carries multi-step future information *beyond* what linear combinations of past frames can extract. Fits closed-form ridge regression `state_t @ W_k ≈ x_{t+k}` for k=1..K on SSv2 train, evals per-horizon L2 on SSv2 val. Fits three parallel linear baselines: `raw` (`x_t @ W_k`, one frame), `mean-pool` (`mean(x_0..x_t) @ W_k`, unordered aggregation), and `hist` (`concat_leftpad(x_0..x_t) @ W_k`, input dim T·D, ordered full-history linear AR ceiling — strictly dominates both `raw` and `mean-pool`). Total gain decomposes additively: `copy − state = (copy − raw) + (raw − mean) + (mean − hist) + (hist − state)`, labelled `LIN PROJ / AGGREG / LIN DYNAMICS / NONLIN DYNAMICS`. `hist − state` isolates whether the RNN's nonlinearity adds anything over a linear AR model.
 
 ```bash
 PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
@@ -106,9 +106,28 @@ PYTHONPATH=/home/manu/vjepa2 python root/evals/multi_horizon_probe.py \
 - `t` ranges over `1..T-k-1`: t=0 is skipped because state starts from zeros, so `state_0` is trivially empty.
 - Use `--train_limit` for smoke tests (e.g. `--train_limit 2000` runs in ~1 min).
 - Interpretation:
-  - `state_probe < raw_probe` at all k → encoder put real multi-step info in the state beyond the current frame.
-  - `state_probe ≈ raw_probe` → state ≈ current frame, no extra temporal signal.
-  - `state_probe ≥ copy` → state encodes nothing useful (broken/noise).
+  - `state < hist` → RNN's nonlinear encoding contributes beyond any linear combination of ordered past frames.
+  - `state ≈ hist` → a linear AR model is doing everything the RNN does; nonlinearity unused.
+  - `state < mean-pool` → ordering contributes beyond unordered aggregation.
+  - `state < raw` → multi-frame history (of any kind) beats single-frame.
+  - `state ≥ copy` → state encodes nothing useful (broken/noise).
+
+## Eval: MLP Probe (evalID: `mlp_probe`)
+
+Nonlinear counterpart to `multi_horizon_probe`. Same (input, target) pair construction but fits a small MLP with SGD/Adam instead of closed-form ridge. Tier 1 only probes `state` and `concat_history` (the ridge `hist` ceiling). Decides between two interpretations of the `NONLIN-DYN ≈ 0` result in Tables 1/2 of `docs/meet2.md`:
+
+- **Possibility 1** — linear AR is the real ceiling under any probe. `mlp(concat_history)` ≈ `ridge(hist)` at all k.
+- **Possibility 2** — nonlinear structure exists in the raw 8 DINO frames; our RNN fails to capture it. `mlp(concat_history)` ≪ `ridge(hist)` at k≥2.
+
+Sanity gate: `mlp(concat_history, k=1)` must ≤ `ridge(hist, k=1)` — MLP is strictly more expressive than a linear map. If it isn't, MLP is under-fit; retune before trusting k≥2.
+
+Reproduction: `scripts/repro/mlp_probe_tier1.sh` (CLS `2ldiw9xk` + patches `e6esmgmu`, GPU 0 / GPU 1).
+
+- Uses the same `load_model`, `load_split_feats`, `build_hist_leftpad`, val-cache truncation from `multi_horizon_probe.py` (imported, not duplicated).
+- One encoder pass per batch updates all probes jointly; per-probe early stopping (patience 3) on val loss.
+- Val L2 matches the ridge convention: sum over D, mean over rows.
+- Ridge reference numbers for CLS `2ldiw9xk` and patches `e6esmgmu` are hardcoded in the script header for side-by-side comparison; for any other checkpoint, treat the ridge column as informational only.
+- Tier 2 (MLP on `last` / `meanpool`) and Tier 3 (capacity ablation) are deferred — run only if Tier 1 is ambiguous.
 
 ## Training: Multi-horizon prediction heads (A2)
 

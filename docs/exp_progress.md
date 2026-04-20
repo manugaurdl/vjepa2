@@ -498,5 +498,97 @@ Baselines (identical across K): copy 1124.6/1525.0/1755.2/1875.0; raw-DINO 919.7
 
 **Reproduce.** See CLS section above for commands; swap `<wandbID>` and use the snapshot path for patches. When training finishes, re-probe on the live `last.pt` under each run's output dir.
 
+### 2026-04-19 — Multi-horizon probe with `lin_reg_history` (full-T left-padded concat)
+
+Extended `multi_horizon_probe.py` to add a 4th baseline: `lin_reg_history = concat_leftpad(x_0..x_t) @ W_hist`, input dim T·D = 3072 (with left-zero-padding so `x_t` always occupies the last D-slot). Strictly dominates `lin_reg_last` and `mean-pool` as a linear probe, so the full decomposition
+
+```
+copy − state = (copy − raw) + (raw − mean) + (mean − hist) + (hist − state)
+                LIN PROJ       AGGREG         LIN DYNAMICS    NONLIN DYNAMICS
+```
+
+has a known sign on LIN PROJ (≥ 0), LIN DYN (≥ 0), and lets NONLIN DYN (`hist − state`) isolate exactly "does the RNN's nonlinearity beat a linear AR model." AGGREG can still flip (raw vs mean aren't nested). Baseline numbers `copy`, `raw`, `mean`, `state` reproduce the 2026-04-09 entry bit-identically — no regression from the additive code change.
+
+**CLS — `2ldiw9xk`** (`pred_in_dino_space_2ldiw9xk/last.pt`):
+
+| k | copy   | raw    | mean   | hist   | state  | LIN PROJ | AGGREG | LIN DYN | NONLIN DYN |
+|---|--------|--------|--------|--------|--------|----------|--------|---------|------------|
+| 1 |  632.3 |  562.1 |  649.1 |  528.1 |  524.0 |    70.1  |  −87.0 |  121.0  |      4.1   |
+| 2 |  925.3 |  779.6 |  788.8 |  728.8 |  730.2 |   145.7  |   −9.2 |   60.0  |     −1.4   |
+| 3 | 1123.1 |  912.6 |  880.8 |  853.7 |  860.4 |   210.5  |   31.9 |   27.1  |     −6.7   |
+| 4 | 1238.3 |  986.8 |  936.3 |  929.9 |  936.0 |   251.5  |   50.5 |    6.4  |     −6.0   |
+
+**Takeaways (CLS).**
+- LIN PROJ grows monotonically with k (mean-regression dominates at long k).
+- AGGREG flips sign around k=2→3: averaging hurts when x_t is already near-optimal (short k), helps once x_t decorrelates (long k).
+- LIN DYN collapses with k (121 → 6): the ordering-specific linear signal is concentrated at k=1 and essentially gone by k=4.
+- **NONLIN DYN ≈ 0 and goes negative for k≥2**: the RNN state is at best marginally better than a linear AR model over ordered past frames, and slightly *worse* at k=2,3,4. The RNN's nonlinearity buys nothing beyond `lin_reg_history`.
+
+**Patches — `e6esmgmu`** (`patch_pred_dino_space_e6esmgmu/last.pt`):
+
+| k | copy   | raw    | mean   | hist   | state  | LIN PROJ | AGGREG | LIN DYN | NONLIN DYN |
+|---|--------|--------|--------|--------|--------|----------|--------|---------|------------|
+| 1 | 1124.6 |  919.7 |  993.1 |  868.9 |  867.0 |   204.8  |  −73.4 |  124.2  |      2.0   |
+| 2 | 1525.0 | 1160.7 | 1144.6 | 1093.8 | 1100.2 |   364.3  |   16.0 |   50.8  |     −6.4   |
+| 3 | 1755.2 | 1279.8 | 1229.1 | 1208.5 | 1220.0 |   475.4  |   50.7 |   20.6  |    −11.6   |
+| 4 | 1875.0 | 1336.6 | 1274.5 | 1269.8 | 1279.8 |   538.4  |   62.1 |    4.7  |    −10.0   |
+
+**Takeaways (patches).**
+- Same qualitative pattern as CLS, larger magnitudes throughout. Reproduction matches the 2026-04-09 entry bit-for-bit on the existing columns.
+- LIN DYN collapses from 124 (k=1) to 4.7 (k=4) — by k=4, `hist` (ordered linear AR) and `mean-pool` (unordered) differ by only ~5 units. For patches, ordering buys almost nothing at long horizons — most patches are static background, where the RNN's "ordered" advantage degenerates into "averaging."
+- **NONLIN DYN is more negative than CLS** at every k≥2 (−6.4 / −11.6 / −10.0 vs CLS −1.4 / −6.7 / −6.0). The patches RNN is *farther* below the linear-AR ceiling than the CLS RNN.
+
+**Joint punchline (CLS + patches).** At every horizon k≥2, neither RNN beats the linear-AR ceiling `lin_reg_history`. Whatever multi-step information ends up in `state_t` is no better than what a closed-form linear regression over `concat_leftpad(x_0..x_t)` extracts directly from raw DINO features. The earlier "AR rollout collapses past k=1" finding was framed as a rollout-mechanism failure; the multi-horizon decomposition shows the state itself isn't carrying anything beyond a linear function of past frames, so the issue isn't *just* the iteration mechanism — it's that the trained nonlinear surprise update isn't producing more useful representations than a stack of past frames + a linear map. Argues that A1 (explicit forward model) is necessary but not sufficient: the *encoder* also needs an objective that pressures it past the linear ceiling.
+
+**Run commands.**
+```bash
+# CLS (GPU 0, ~10 min)
+PYTHONPATH=/home/manu/vjepa2 /home/manu/vjepa2/.venv/bin/python \
+    root/evals/multi_horizon_probe.py \
+    --checkpoint /nas/manu/vjepa2/outputs/pred_in_dino_space_2ldiw9xk/last.pt \
+    --data_dir /nas/manu --max_horizon 4 --batch_size 128 --gpu 0
+
+# Patches (GPU 1, ~4 h)
+PYTHONPATH=/home/manu/vjepa2 /home/manu/vjepa2/.venv/bin/python \
+    root/evals/multi_horizon_probe.py \
+    --checkpoint /nas/manu/vjepa2/outputs/patch_pred_dino_space_e6esmgmu/last.pt \
+    --data_dir /nas/manu --max_horizon 4 --batch_size 32 --gpu 1
+```
+
+Logs: `outputs/mh_probe_{2ldiw9xk,e6esmgmu}_fullT_20260419.log`.
+
+### 2026-04-19 — MLP probe (evalID: `mlp_probe`) — CLS Tier 1
+
+Tier 1 test of Poss 1 (linear AR is the ceiling) vs Poss 2 (nonlinear structure exists but RNN misses it) per `docs/meet2.md` TAKEAWAY SO FAR. MLP fit on frozen `state_t` and `concat_history` with SGD. Implementation: residual MLP (linear skip + zero-init GELU branch), skip warm-started with closed-form ridge and **frozen** during SGD — so the nonlinear branch only needs to find corrections on top of the ridge solution. Guarantees final val ≤ ridge (nonlinear can always stay at zero) so no under-fit risk.
+
+**CLS — `2ldiw9xk`** (`pred_in_dino_space_2ldiw9xk/last.pt`)
+
+Hyperparameters: `--mlp_hidden 1024 --mlp_layers 2 --epochs 20 --lr 3e-4 --weight_decay 1e-4 --patience 5 --seed 0 --batch_size 128`. Ridge lambda 1e-3 (default). Training time ~8 min on a single GPU (all probes early-stopped by epoch 8 of 20).
+
+| k | ridge(state) | mlp(state) | Δstate | ridge(hist) | mlp(hist) | Δhist | Δhist % |
+|---|--------------|------------|--------|-------------|-----------|-------|---------|
+| 1 | 524.0        | 520.2      |  3.8   | 528.1       | 524.9     |  3.2  | 0.61%   |
+| 2 | 730.2        | 723.5      |  6.7   | 728.8       | 724.1     |  4.7  | 0.65%   |
+| 3 | 860.4        | 852.3      |  8.1   | 853.7       | 848.1     |  5.6  | 0.66%   |
+| 4 | 936.0        | 928.6      |  7.4   | 929.9       | 924.3     |  5.6  | 0.60%   |
+
+Sanity gate: `mlp(hist, k=1) = 524.9 ≤ ridge(hist, k=1) = 528.1` ✓ (MLP strictly more expressive; warm-start + frozen skip + zero-init nonlinear guarantees this by construction).
+
+**Decision: Possibility 1 for CLS.** Δhist is 0.60-0.66% across all k — within the ~1% noise band of Poss 1 (decision rule in `delete_plan_MLP_probe.md`). Even with access to a nonlinear function class, the MLP can only shave ~0.6% off the ridge ceiling on the raw 8 DINO frames. The linear-AR figure in Tables 1/2 of `meet2.md` is (to within 1%) the real extractable ceiling — not a probe-class artifact.
+
+**Δstate ≈ Δhist** (0.6-0.9% on state, 0.6% on hist). The nonlinear branch finds essentially the same small residual when applied to the RNN state as to the raw concat. Consistent with Poss 1 reading: there isn't significantly more nonlinear structure in the raw frames than what the state already encodes linearly.
+
+**Notes on the SGD path** (lessons learned; retained here because they affect reproducibility):
+- First attempt (plain ReLU MLP, no warm-start, LR 1e-3, patience 3) plateaued ~30% above ridge on `concat_history` within 7 epochs. Confused early stopping with "convergence". Discarded.
+- Residual design (skip + zero-init nonlinear) fixed init: forward(x) = ridge(x) at start.
+- With skip trainable + LR 1e-3, SGD drifted skip away from ridge on concat_history (1.2M-param 3072→384 linear overshoots with batched-per-t updates). Freezing skip after warm-start + batched-per-t loss + LR 3e-4 made training stable.
+
+**Run command**:
+```bash
+bash scripts/repro/mlp_probe_tier1.sh    # launches CLS (GPU 0) + patches (GPU 1)
+```
+
+Logs: `outputs/mlp_probe_tier1/{2ldiw9xk,e6esmgmu}.log`.
+
 ## Open Questions
 -
