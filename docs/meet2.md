@@ -331,12 +331,10 @@ right now, we want to improve stage 1 encoder. To do that, we need benchmarks th
 2. Improve stage 1 encoder (T=64, TTT, capacity, aux losses).
 3. Close RNN-vs-transformer gap on patch prediction.
 
-
-
 There are two things we care about **spatio-temporal compression** in stage 1:
 
 - should capture first-order dynamics; needed to predict nearby future frames / model scene-flow
-- should capture semantics; needed for long-horizon forecasting 
+- should capture semantics; needed for long-horizon forecasting
 
 # 1. Stage 2 proxy benchmark
 
@@ -363,18 +361,6 @@ There are two things we care about **spatio-temporal compression** in stage 1:
 - to do really long horizon prediction, you need to operate at higher temporal abstraction.
 - recurrence trained with next few-frame prediciton can minimize spatio-temporal redundancy. its not enough to operate at higher temporal abstraction. for that, we will have to train autoregressive transformer that operates a chunk levels. 
 - to get to that, lets first get as much juice as possible from the recurrent state - long context, as lossless compression, meaningful compression that enables great long horizon chunk-level prediction (for stage 2).
-
-### Widening ***state-vs-baseline gaps.***
-
-#### Long-horizon prediction (K=3,4) may require more context
-
-- right now we evaluate, **All-t, no warmup.** multi_horizon_[probe.py](http://probe.py) evaluates anchors t=1..T−k−1. For qk=4, T=8 → t ∈ {1,2,3}: **sometimes the state has seen only 2 frames before predicting 4 ahead**
-- those low-t large-k samples contribute to the average, likely dragging it down. Gating to t ≥ k (or t ≥ 3) would be a cleaner eval and ***might slightly widen state-vs-baseline gaps.***
-
-#### train on longer videos.
-
-- Training on 32-64 frame sequences at the same 384-dim state forces harder compression; hard to outperform W(concat) baseline.
-- the alternative (increasing horizon i.e longer k) is dominated by mean-regression as I argued earlier.
 
 ## Evaluating long-horizon dynamics
 
@@ -410,6 +396,39 @@ There are two things we care about **spatio-temporal compression** in stage 1:
 - Same question as stage 1, just evaluated at the scale where stage 2 will use it.
 
 #### Q: Is the goal to improve stage-1 encoders, or to qualify stage 1 for stage 2? These are separate metrics.\
+
+# 2. Improve stage 1 encoder (T=64, TTT, capacity, aux losses)
+
+**GOAL**: *Can we get a compressed spatio-temporal chunk that preserves semantic information necessary for long horizon prediction?*
+
+### Widening ***state-vs-baseline gaps.***
+
+#### Long-horizon prediction (K=3,4) may require more context
+
+- right now we evaluate, **All-t, no warmup.** multi_horizon_[probe.py](http://probe.py) evaluates anchors t=1..T−k−1. For qk=4, T=8 → t ∈ {1,2,3}: **sometimes the state has seen only 2 frames before predicting 4 ahead**
+- those low-t large-k samples contribute to the average, likely dragging it down. Gating to t ≥ k (or t ≥ 3) would be a cleaner eval and ***might slightly widen state-vs-baseline gaps.***
+
+#### train on longer videos.
+
+- Training on 32-64 frame sequences at the same 384-dim state forces harder compression; hard to outperform W(concat) baseline.
+- the alternative (increasing horizon i.e longer k) is dominated by mean-regression as I argued earlier.
+
+### Recurrent update - more expressive update, TTT
+
+- explore if we lag behind causal transformer
+
+### Encoder capacity
+
+- RNN: wider `w_pred` MLP (`pred_hidden_dim` config), deeper MLP, bigger state dim, or cross-patch attention in the update.
+
+### Auxiliary / alternative training objectives
+
+- A k=1-trained encoder has no pressure to encode such priors; a long-horizon or contrastive objective does.
+
+### Next-frame prediction quality (patches)
+
+- sigreg
+- dinoWM
 
 # 3. Close RNN-causal transformer gap on patches
 
